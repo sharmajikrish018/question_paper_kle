@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+*.env.local
+
+# Database (runtime data — not source)
+data/database/*.db
+data/database/*.db-shm
+data/database/*.db-wal
+
+# Generated outputs (runtime artifacts)
+data/generated_outputs/drafts/
+data/generated_outputs/approved/
+data/generated_outputs/schemes/
+data/generated_outputs/validation_reports/
+
+# Uploaded files (user-provided, not source)
+data/question_bank/
+data/lesson_plan/
+
+# Keep university templates and sample files
+!data/university_templates/
+!data/sample_files/
+
+# Logs
+logs/
+*.log
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# HuggingFace / model cache
+.cache/
+
+# Node / Next.js
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Local guides / personal notes
+Clear cache and DB.txt
+architecture.txt
+explanation.txt
+prompt.txt

@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=69.0", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "qp-agent"
+version = "0.1.0"
+description = "Question Paper Setting Agent for university faculty"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+keywords = ["education", "question-paper", "ai", "generative-ai", "university"]
+
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.29.0",
+    "streamlit>=1.35.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    "sqlalchemy>=2.0.30",
+    "pandas>=2.2.2",
+    "openpyxl>=3.1.4",
+    "python-docx>=1.1.2",
+    "pypdf>=4.2.0",
+    "pdfplumber>=0.11.0",
+    "PyMuPDF>=1.24.0",
+    "openai>=1.30.0",
+    "ollama>=0.2.0",
+    "python-dotenv>=1.0.1",
+    "tenacity>=8.3.0",
+    "sentence-transformers>=3.0.0",
+    "scikit-learn>=1.5.0",
+    "numpy>=1.26.4",
+    "reportlab>=4.2.2",
+    "ortools>=9.10.4067",
+    "httpx>=0.27.0",
+    "python-multipart>=0.0.9",
+    "Pillow>=10.3.0",
+    "transformers>=4.41.2",
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.2",
+    "pytest-asyncio>=0.23.7",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+exclude = ["tests*", "data*", "logs*"]

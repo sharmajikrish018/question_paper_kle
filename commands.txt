@@ -1,0 +1,234 @@
+================================================================
+  QUESTION PAPER SETTING AGENT
+  Important Commands Reference (Windows / PowerShell)
+  Generative AI Course
+================================================================
+
+NOTE: All commands must be run from the project directory:
+  cd D:\sdgsgddgsgsdg\Prashnopatra
+
+================================================================
+  1. FIRST-TIME SETUP (already done — for reference only)
+================================================================
+
+# Create virtual environment:
+python -m venv .venv
+
+# Install all dependencies:
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Create .env config (copy the example):
+Copy-Item .env.example .env
+
+# Initialize the database:
+.\.venv\Scripts\python.exe -c "from repositories.database import init_db; init_db(); print('DB initialized')"
+
+# Create sample files (140-question bank, lesson plan, template):
+.\.venv\Scripts\python.exe scripts\create_sample_files.py
+
+================================================================
+  2. START THE APPLICATION
+================================================================
+
+# Activate venv:
+.\.venv\Scripts\Activate.ps1
+
+# Start Streamlit:
+streamlit run app.py --server.address 127.0.0.1 --server.port 8501
+
+# App URL: http://127.0.0.1:8501  (or http://localhost:8501)
+
+# Headless mode (no browser auto-open):
+streamlit run app.py --server.headless true --server.port 8501
+
+================================================================
+  3. VIRTUAL ENVIRONMENT
+================================================================
+
+# Activate:
+.\.venv\Scripts\Activate.ps1
+
+# Deactivate:
+deactivate
+
+# Check Python version:
+python --version
+
+# Check installed packages:
+pip list
+
+================================================================
+  4. LOAD DATA (Required before generating papers)
+================================================================
+
+# Step 1 — Load the sample question bank + lesson plan into the app:
+#   Open http://127.0.0.1:8501
+#   Use the Course Setup / Question Bank / Lesson Plan pages to import:
+#     data/sample_files/sample_question_bank.xlsx
+#     data/sample_files/sample_lesson_plan.docx
+#     data/university_templates/sample_university_template.docx
+#
+#   OR (alternatively) put your real files into:
+#     data/question_bank/      <- question bank (.xlsx, .csv, .json, .docx, .pdf)
+#     data/lesson_plan/        <- lesson plan (.pdf, .docx, .txt, .md, .xlsx)
+#     data/university_templates/ <- DOCX template
+#   then import them from the app UI.
+#
+#   NOTE: The repo also contains these PDFs you may want to use instead:
+#     Required data/Generative AI_question bank.pdf
+#     Required data/Genearative AI_ lesson plan.pdf
+#   Copy them into the data folders above, or parse them from the app.
+
+# Step 2 — Verify questions are in the database:
+.\.venv\Scripts\python.exe -c "from repositories.database import get_session, QuestionDB; [print(f'Questions in DB: {s.query(QuestionDB).count()}') for s in [next(get_session().__enter__())]]"
+
+================================================================
+  5. RUN TESTS
+================================================================
+
+# Run full test suite (mock LLM, no API key needed):
+$env:USE_MOCK_LLM = "true"
+.\.venv\Scripts\python.exe -m pytest tests/ -v
+
+# Run a specific test file:
+.\.venv\Scripts\python.exe -m pytest tests/test_blueprint.py -v
+.\.venv\Scripts\python.exe -m pytest tests/test_generation.py -v
+.\.venv\Scripts\python.exe -m pytest tests/test_question_bank.py -v
+.\.venv\Scripts\python.exe -m pytest tests/test_similarity.py -v
+.\.venv\Scripts\python.exe -m pytest tests/test_config.py -v
+
+# Run a single test:
+.\.venv\Scripts\python.exe -m pytest tests/test_blueprint.py::TestMinorBlueprint::test_minor_default_structure -v
+
+# Run with short traceback:
+.\.venv\Scripts\python.exe -m pytest tests/ --tb=short
+
+================================================================
+  6. CONFIGURATION
+================================================================
+
+# Edit environment / API key config:
+notepad .env
+
+# Copy example config (if .env is missing):
+Copy-Item .env.example .env
+
+# Current key settings in .env:
+#   LLM_PROVIDER="groq"
+#   LLM_MODEL="openai/gpt-oss-120b"
+#   LLM_BASE_URL="https://api.groq.com/openai/v1"
+#   GROQ_API_KEY="gsk_..."          <- Groq API key
+#   USE_MOCK_LLM=true               <- currently enabled (no key needed)
+#
+# To use a real API key: set USE_MOCK_LLM=false and add your GROQ_API_KEY.
+# Get a free key at https://console.groq.com
+
+================================================================
+  7. DATABASE
+================================================================
+
+# Clear ALL data and re-initialize (fresh start):
+.\.venv\Scripts\python.exe -c "from repositories.database import engine, Base, init_db; Base.metadata.drop_all(engine); init_db(); print('Database cleared and re-initialized.')"
+
+# Then re-import question bank + lesson plan (see Section 4).
+
+# Database file location:
+#   data/database/qp_agent.db
+#
+# View database with a GUI (e.g.):
+#   DB Browser for SQLite - https://sqlitebrowser.org
+#   Open: data/database/qp_agent.db
+
+================================================================
+  8. HEALTH CHECK
+================================================================
+
+# Test all imports and settings:
+.\.venv\Scripts\python.exe -c "from config.settings import get_settings; s = get_settings(); print('Settings OK:', s.app_name); print('Provider:', s.llm_provider); print('Model:', s.llm_model); print('Mock mode:', s.is_mock_mode); from repositories.database import init_db; init_db(); print('Database OK'); print('All systems operational')"
+
+# Check question count:
+.\.venv\Scripts\python.exe -c "from repositories.database import get_session, QuestionDB; s = get_session().__enter__(); print(f'Questions in DB: {s.query(QuestionDB).count()}'); s.close()"
+
+================================================================
+  9. OFFLINE / MOCK MODE (No API Key Required)
+================================================================
+
+# Enable mock mode for current session only:
+$env:USE_MOCK_LLM = "true"
+streamlit run app.py
+
+# Enable mock mode permanently - edit .env:
+#   USE_MOCK_LLM=true
+
+# All features work in mock mode except live LLM question generation.
+
+================================================================
+  10. INSTALL PACKAGES MANUALLY
+================================================================
+
+# Install all requirements:
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# Upgrade all packages:
+.\.venv\Scripts\python.exe -m pip install --upgrade -r requirements.txt
+
+================================================================
+  11. EXPORT & OUTPUTS
+================================================================
+
+# Output directories:
+#   Drafts:              data/generated_outputs/drafts/
+#   Approved finals:     data/generated_outputs/approved/
+#   Valuation schemes:   data/generated_outputs/schemes/
+#   Validation reports:  data/generated_outputs/validation_reports/
+#   Logs:                logs/qp_agent.log
+
+# Open the folders:
+explorer data\generated_outputs
+explorer data\generated_outputs\approved
+explorer data\generated_outputs\drafts
+
+================================================================
+  12. GIT (Optional version control)
+================================================================
+
+# Current repo is already cloned. Check status:
+git status
+
+# NOTE: The following are excluded by .gitignore:
+#   .env (contains API keys)
+#   data/generated_outputs/ (confidential papers)
+#   data/database/ (database files)
+#   .venv/ (virtual environment)
+#   logs/ (log files)
+
+================================================================
+  13. COMMON TROUBLESHOOTING (Windows)
+================================================================
+
+# Error: "streamlit not found"
+#   Solution: Activate venv first
+.\.venv\Scripts\Activate.ps1
+
+# Error: "No API key found"
+#   Solution: Add key to .env or use mock mode
+notepad .env   # set GROQ_API_KEY or USE_MOCK_LLM=true
+
+# Error: "No questions found for slot"
+#   Solution: Import the question bank first (see Section 4)
+
+# Error: "Cannot export: set is GENERATED"
+#   Solution: In Faculty Review -> Approve all questions -> Approve Set -> Export
+
+# Error: "Port 8501 already in use"
+Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force
+streamlit run app.py
+
+# Error: "Execution of scripts is disabled on this system"
+#   Solution: Run this once in your PowerShell session:
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+================================================================
+  END OF COMMANDS REFERENCE
+================================================================

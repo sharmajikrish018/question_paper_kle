@@ -1,0 +1,45 @@
+# Core Web & API Framework
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+httpx>=0.27.0
+
+# Optional Streamlit UI
+streamlit>=1.35.0
+
+# Data Validation & Configuration
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-dotenv>=1.0.1
+
+# Database & ORM
+sqlalchemy>=2.0.30
+
+# File Formats & Parsing (Excel, DOCX, PDF)
+pandas>=2.2.2
+openpyxl>=3.1.4
+python-docx>=1.1.2
+pypdf>=4.2.0
+pdfplumber>=0.11.0
+PyMuPDF>=1.24.0
+Pillow>=10.3.0
+
+# AI, LLM & Machine Learning
+openai>=1.30.0
+ollama>=0.2.0
+tenacity>=8.3.0
+sentence-transformers>=3.0.0
+scikit-learn>=1.5.0
+numpy>=1.26.4
+transformers>=4.41.2
+torch>=2.3.0
+torchvision>=0.18.0
+
+# Optimization & Document Export
+reportlab>=4.2.2
+ortools>=9.10.4067
+
+# Testing & Async
+pytest>=8.2.2
+pytest-asyncio>=0.23.7
+
