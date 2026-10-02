@@ -69,7 +69,7 @@ class Settings(BaseSettings):
 
     # Ollama & Qwen extras
     ollama_base_url: str = "http://localhost:11434/v1"
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen3:8b"
 
     # Mock mode
     use_mock_llm: bool = False

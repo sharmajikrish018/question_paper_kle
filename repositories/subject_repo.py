@@ -80,7 +80,7 @@ class SubjectRepository:
             row = session.query(AppSettingDB).filter(
                 AppSettingDB.key == "active_subject_id"
             ).first()
-            return row.value if row else None
+            return row.value if (row and row.value) else None
 
     def set_active_subject_id(self, subject_id: str) -> None:
         with get_session() as session:
@@ -258,7 +258,40 @@ class SubjectRepository:
             ).first()
             if not course:
                 return False
+
+            from repositories.database import (
+                QuestionDB, GeneratedQuestionDB, PaperQuestionDB,
+                PaperSetDB, PaperRequestDB, UsageHistoryDB, AuditLogDB,
+                UploadedFileDB, SubjectContextDB, AppSettingDB
+            )
+
+            # 1. Delete questions for subject
+            session.query(QuestionDB).filter(QuestionDB.subject_id == subject_id).delete(synchronize_session=False)
+            session.query(GeneratedQuestionDB).filter(GeneratedQuestionDB.subject_id == subject_id).delete(synchronize_session=False)
+
+            # 2. Delete paper sets and questions
+            session.query(PaperQuestionDB).filter(PaperQuestionDB.subject_id == subject_id).delete(synchronize_session=False)
+            session.query(PaperSetDB).filter(PaperSetDB.subject_id == subject_id).delete(synchronize_session=False)
+            session.query(PaperRequestDB).filter(PaperRequestDB.subject_id == subject_id).delete(synchronize_session=False)
+
+            # 3. Delete history, audit logs & uploaded files
+            session.query(UsageHistoryDB).filter(UsageHistoryDB.subject_id == subject_id).delete(synchronize_session=False)
+            session.query(AuditLogDB).filter(AuditLogDB.subject_id == subject_id).delete(synchronize_session=False)
+            session.query(UploadedFileDB).filter(UploadedFileDB.subject_id == subject_id).delete(synchronize_session=False)
+
+            # 4. Delete lesson plan / subject context
+            session.query(SubjectContextDB).filter(SubjectContextDB.subject_id == subject_id).delete(synchronize_session=False)
+
+            # 5. Delete course tree
             session.delete(course)
+            session.flush()
+
+            # 6. Update active subject if needed
+            active_row = session.query(AppSettingDB).filter(AppSettingDB.key == "active_subject_id").first()
+            if active_row and active_row.value == subject_id:
+                active_row.value = ""
+
+            session.commit()
         return True
 
     # ── Active subject convenience (returns full dict or None) ─────────────────

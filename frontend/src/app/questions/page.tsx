@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
-import { api, type Question, type Completeness, type ImportResult } from '@/lib/api'
-import { PageHeader, SectionLabel, Badge, FileDropzone, Alert, EmptyState, ProgressBar, Spinner } from '@/components/ui'
+import { useState, useEffect, useCallback } from 'react'
+import { api, type Question, type Completeness, type ImportResult, type SubjectDetail } from '@/lib/api'
+import { PageHeader, SectionLabel, Badge, FileDropzone, Alert, EmptyState, ProgressBar, Spinner, ActiveSubjectBanner } from '@/components/ui'
 
 type Tab = 'overview' | 'browse' | 'import'
 
@@ -15,10 +15,65 @@ export default function QuestionsPage() {
   const [importing, setImporting] = useState(false)
   const [importResult, setImportResult] = useState<ImportResult | null>(null)
   const [importError, setImportError] = useState('')
+  const [activeSubject, setActiveSubject] = useState<SubjectDetail | null>(null)
+
+  // Derive chapter list from active subject's Course Setup
+  const subjectChapters: number[] = []
+  if (activeSubject?.units) {
+    for (const u of activeSubject.units) {
+      for (const ch of u.chapters ?? []) {
+        if (!subjectChapters.includes(ch.chapter_number)) {
+          subjectChapters.push(ch.chapter_number)
+        }
+      }
+    }
+    subjectChapters.sort((a, b) => a - b)
+  }
+
+  const loadSubject = useCallback(async () => {
+    try {
+      const { active_subject_id } = await api.getActiveSubjectId()
+      if (active_subject_id) {
+        const detail = await api.getSubject(active_subject_id)
+        setActiveSubject(detail)
+      } else {
+        const list = await api.listSubjects()
+        if (list.length > 0) {
+          const detail = await api.getSubject(list[0].subject_id)
+          setActiveSubject(detail)
+        }
+      }
+    } catch { /* ignore */ }
+  }, [])
 
   useEffect(() => {
+    loadSubject()
     api.getCompleteness().then(setCompleteness).catch(() => {})
-  }, [])
+
+    const handleSubjectChange = () => {
+      setImportResult(null)
+      setImportError('')
+      setFilter({ chapter: '', bloom: '' })
+      setQuestions([])
+      loadSubject()
+      api.getCompleteness().then(setCompleteness).catch(() => {})
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('activeSubjectChanged', handleSubjectChange)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('activeSubjectChanged', handleSubjectChange)
+      }
+    }
+  }, [loadSubject])
+
+  // Reload questions when tab/filter changes
+  useEffect(() => {
+    if (tab === 'browse') loadQuestions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, filter.chapter, filter.bloom])
 
   async function loadQuestions() {
     setLoadingQ(true)
@@ -32,8 +87,6 @@ export default function QuestionsPage() {
     } finally { setLoadingQ(false) }
   }
 
-  useEffect(() => { if (tab === 'browse') loadQuestions() }, [tab, filter.chapter, filter.bloom])
-
   async function handleImport(file: File) {
     setImporting(true)
     setImportResult(null)
@@ -41,7 +94,7 @@ export default function QuestionsPage() {
     try {
       const result = await api.importQuestions(file)
       setImportResult(result)
-      // Refresh completeness
+      // Refresh completeness after import
       api.getCompleteness().then(setCompleteness)
     } catch (e: unknown) {
       setImportError(e instanceof Error ? e.message : 'Import failed')
@@ -50,6 +103,9 @@ export default function QuestionsPage() {
 
   const totalQ = completeness.reduce((s, c) => s + c.total, 0)
   const readyChapters = completeness.filter(c => c.complete).length
+  const totalExpectedChapters = completeness.length || subjectChapters.length || 1
+  // Bank completeness = readyChapters out of expected chapters (each needs 20 questions = 10 L2 + 10 L3)
+  const bankCompletePct = Math.min(100, Math.round((readyChapters / totalExpectedChapters) * 100))
 
   function bloomBadge(bl: string) {
     return bl === 'L2'
@@ -63,9 +119,17 @@ export default function QuestionsPage() {
       : <Badge variant="purple">AI</Badge>
   }
 
+  // Browse chapter filter options: prefer subject chapters, fall back to completeness data
+  const browseChapters = subjectChapters.length > 0
+    ? subjectChapters
+    : completeness.map(c => c.chapter_number)
+
   return (
     <>
       <PageHeader title="Question Bank" subtitle="Manage and import exam questions" />
+
+      {/* Active subject banner */}
+      <ActiveSubjectBanner subject={activeSubject} showLink />
 
       {/* Tabs */}
       <div className="tabs">
@@ -88,49 +152,62 @@ export default function QuestionsPage() {
             </div>
             <div className="stat-card">
               <div className="stat-icon">✅</div>
-              <div className="stat-value">{readyChapters}/7</div>
+              <div className="stat-value">{readyChapters}/{totalExpectedChapters}</div>
               <div className="stat-label">Chapters Ready</div>
             </div>
             <div className="stat-card">
               <div className="stat-icon">📊</div>
-              <div className="stat-value">{Math.min(100, Math.round(totalQ / 140 * 100))}%</div>
+              <div className="stat-value">{bankCompletePct}%</div>
               <div className="stat-label">Bank Complete</div>
             </div>
           </div>
 
           <SectionLabel style={{ marginTop: '1.5rem' }}>Chapter Completeness</SectionLabel>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Chapter</th>
-                  <th>L2 (Understand)</th>
-                  <th>L3 (Apply)</th>
-                  <th>Total</th>
-                  <th>Progress</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {completeness.map(c => (
-                  <tr key={c.chapter_number}>
-                    <td className="font-medium">Chapter {c.chapter_number}</td>
-                    <td>{c.l2_ok ? <span className="text-green">{c.l2_count}</span> : <span className="text-muted">{c.l2_count}/10</span>}</td>
-                    <td>{c.l3_ok ? <span className="text-green">{c.l3_count}</span> : <span className="text-muted">{c.l3_count}/10</span>}</td>
-                    <td>{c.total}/20</td>
-                    <td style={{ width: 120 }}>
-                      <ProgressBar value={c.total} max={20} />
-                    </td>
-                    <td>
-                      {c.complete
-                        ? <Badge variant="green">✅ Ready</Badge>
-                        : <Badge variant="orange">⚠ Incomplete</Badge>}
-                    </td>
+          {completeness.length === 0 ? (
+            <EmptyState
+              icon="📭"
+              title="No question bank data"
+              sub="Import a question bank for this subject to see chapter completeness"
+              action={
+                <button className="btn btn-primary btn-sm" onClick={() => setTab('import')}>
+                  Import Questions
+                </button>
+              }
+            />
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Chapter</th>
+                    <th>L2 (Understand)</th>
+                    <th>L3 (Apply)</th>
+                    <th>Total</th>
+                    <th>Progress</th>
+                    <th>Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {completeness.map(c => (
+                    <tr key={c.chapter_number}>
+                      <td className="font-medium">Chapter {c.chapter_number}</td>
+                      <td>{c.l2_ok ? <span className="text-green">{c.l2_count}</span> : <span className="text-muted">{c.l2_count}/10</span>}</td>
+                      <td>{c.l3_ok ? <span className="text-green">{c.l3_count}</span> : <span className="text-muted">{c.l3_count}/10</span>}</td>
+                      <td>{c.total}/20</td>
+                      <td style={{ width: 120 }}>
+                        <ProgressBar value={c.total} max={20} />
+                      </td>
+                      <td>
+                        {c.complete
+                          ? <Badge variant="green">✅ Ready</Badge>
+                          : <Badge variant="orange">⚠ Incomplete</Badge>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
 
@@ -138,10 +215,12 @@ export default function QuestionsPage() {
       {tab === 'browse' && (
         <>
           <div className="flex gap-3 mb-6" style={{ flexWrap: 'wrap' }}>
-            <select className="form-select" style={{ width: 180 }} value={filter.chapter}
+            <select className="form-select" style={{ width: 200 }} value={filter.chapter}
               onChange={e => setFilter(f => ({ ...f, chapter: e.target.value }))}>
               <option value="">All Chapters</option>
-              {[1,2,3,4,5,6,7].map(n => <option key={n} value={n}>Chapter {n}</option>)}
+              {browseChapters.map(n => (
+                <option key={n} value={n}>Chapter {n}</option>
+              ))}
             </select>
             <select className="form-select" style={{ width: 160 }} value={filter.bloom}
               onChange={e => setFilter(f => ({ ...f, bloom: e.target.value }))}>
@@ -189,7 +268,8 @@ export default function QuestionsPage() {
         <div style={{ maxWidth: 640 }}>
           <p className="text-sm text-muted mb-6">
             Upload your question bank as PDF, Excel (.xlsx), CSV, JSON, or DOCX.
-            The system will extract all questions and import them automatically.
+            The system will extract all questions and import them automatically into{' '}
+            <strong>{activeSubject?.course_name ?? 'the active subject'}</strong>.
           </p>
 
           <FileDropzone
@@ -237,6 +317,9 @@ export default function QuestionsPage() {
                   ))}
                 </div>
               )}
+              <button className="btn btn-secondary btn-sm mt-4" onClick={() => setTab('overview')}>
+                View Chapter Completeness →
+              </button>
             </div>
           )}
         </div>

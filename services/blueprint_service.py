@@ -58,22 +58,58 @@ class BlueprintService:
         selected_chapters: Optional[list[int]] = None,
         random_seed: Optional[int] = None,
         tolerance_percent: int = 5,
+        marking_scheme: Optional[dict] = None,
+        exam_subtype: Optional[str] = "ISA-I",
     ) -> MinorBlueprint:
         """
-        Build a validated MinorBlueprint.
+        Build a validated MinorBlueprint. Consumes saved marking scheme if provided.
         """
         self._validate_bloom_percents(l2_percent, l3_percent)
+
+        scheme = marking_scheme or {}
+        total_q = scheme.get("total_questions", 3)
+        q_attempt = scheme.get("questions_to_attempt", 2)
+        total_marks = scheme.get("total_marks", 30)
+        sub_pattern = scheme.get("sub_question_pattern") or [10, 5]
+        duration_str = scheme.get("duration", "")
+        # Parse duration minutes if string like "75 minutes" or "60 mins"
+        dur_mins = 75
+        if duration_str:
+            import re
+            m = re.search(r"\d+", str(duration_str))
+            if m:
+                dur_mins = int(m.group(0))
+
+        instruction = scheme.get("instructions") or f"Answer any {q_attempt} full questions. Each full question carries equal marks."
+        marks_per_full = scheme.get("marks_per_full_question") or sum(sub_pattern)
+
+        parts_count = len(sub_pattern) if sub_pattern else 2
+        total_printed = total_q * parts_count
+
         l2_count, l3_count = self._allocate_bloom(
-            MINOR_TOTAL_PRINTED, l2_percent, l3_percent, tolerance_percent
+            total_printed, l2_percent, l3_percent, tolerance_percent
         )
 
+        bank_count = max(1, round(total_printed * 0.67))
+        ai_count = total_printed - bank_count
+
         # Source/bloom matrix for bank and AI subsets
-        bank_l2, bank_l3 = self._allocate_bloom(MINOR_BANK, l2_percent, l3_percent, tolerance_percent)
+        bank_l2, bank_l3 = self._allocate_bloom(bank_count, l2_percent, l3_percent, tolerance_percent)
         ai_l2, ai_l3 = l2_count - bank_l2, l3_count - bank_l3
 
         bp = MinorBlueprint(
-            source=SourceAllocation(bank_count=MINOR_BANK, ai_count=MINOR_AI, total=MINOR_TOTAL_PRINTED),
-            bloom=BloomAllocation(l2_count=l2_count, l3_count=l3_count, total=MINOR_TOTAL_PRINTED),
+            exam_type=ExamType.MINOR,
+            exam_subtype=exam_subtype or "ISA-I",
+            total_printed_questions=total_printed,
+            total_attempted_marks=total_marks,
+            duration_minutes=dur_mins,
+            main_question_count=total_q,
+            parts_per_question=parts_count,
+            marks_per_part=sub_pattern[0] if sub_pattern else 10,
+            sub_question_marks=sub_pattern,
+            choice_instruction=instruction,
+            source=SourceAllocation(bank_count=bank_count, ai_count=ai_count, total=total_printed),
+            bloom=BloomAllocation(l2_count=l2_count, l3_count=l3_count, total=total_printed),
             bank_l2=bank_l2,
             bank_l3=bank_l3,
             ai_l2=ai_l2,
@@ -85,8 +121,8 @@ class BlueprintService:
             random_seed=random_seed,
         )
         logger.info(
-            f"MinorBlueprint: bank={MINOR_BANK} AI={MINOR_AI} "
-            f"L2={l2_count} L3={l3_count}"
+            f"MinorBlueprint ({exam_subtype}): bank={bank_count} AI={ai_count} "
+            f"L2={l2_count} L3={l3_count} marks={total_marks} pattern={sub_pattern}"
         )
         return bp
 
@@ -97,12 +133,26 @@ class BlueprintService:
         unit_allocations: Optional[list[dict]] = None,
         random_seed: Optional[int] = None,
         tolerance_percent: int = 5,
+        marking_scheme: Optional[dict] = None,
+        exam_subtype: Optional[str] = "ESA",
     ) -> EndSemBlueprint:
         """
-        Build a validated EndSemBlueprint.
-        unit_allocations: list of {unit, bank, ai, total}
+        Build a validated EndSemBlueprint. Consumes saved marking scheme if provided.
         """
         self._validate_bloom_percents(l2_percent, l3_percent)
+
+        scheme = marking_scheme or {}
+        total_marks = scheme.get("total_marks", 100)
+        sub_pattern = scheme.get("sub_question_pattern") or [10, 10]
+        duration_str = scheme.get("duration", "")
+        dur_mins = 180
+        if duration_str:
+            import re
+            m = re.search(r"\d+", str(duration_str))
+            if m:
+                dur_mins = int(m.group(0))
+
+        instruction = scheme.get("instructions") or "Answer any TWO full questions from Unit 1 & 2, and one from Unit 3."
 
         unit_allocs_cfg = unit_allocations or DEFAULT_ENDSEM_UNITS
         self._validate_unit_alloc(unit_allocs_cfg)
@@ -135,6 +185,13 @@ class BlueprintService:
             ))
 
         bp = EndSemBlueprint(
+            exam_type=ExamType.END_SEM,
+            exam_subtype=exam_subtype or "ESA",
+            total_printed_questions=ENDSEM_TOTAL_PRINTED,
+            total_attempted_marks=total_marks,
+            duration_minutes=dur_mins,
+            sub_question_marks=sub_pattern,
+            choice_instruction=instruction,
             source=SourceAllocation(bank_count=ENDSEM_BANK, ai_count=ENDSEM_AI, total=ENDSEM_TOTAL_PRINTED),
             bloom=BloomAllocation(l2_count=l2_count, l3_count=l3_count, total=ENDSEM_TOTAL_PRINTED),
             unit_allocations=unit_objs,
@@ -144,8 +201,8 @@ class BlueprintService:
             random_seed=random_seed,
         )
         logger.info(
-            f"EndSemBlueprint: bank={ENDSEM_BANK} AI={ENDSEM_AI} "
-            f"L2={l2_count} L3={l3_count}"
+            f"EndSemBlueprint ({exam_subtype}): bank={ENDSEM_BANK} AI={ENDSEM_AI} "
+            f"L2={l2_count} L3={l3_count} marks={total_marks}"
         )
         return bp
 

@@ -14,7 +14,7 @@ from repositories.database import get_session, PaperSetDB, PaperQuestionDB
 from repositories.paper_repo import PaperRepository
 from repositories.audit_repo import AuditRepository
 from agents.coordinator import CoordinatorAgent
-from agents.export_agent import ExportAgent, ExportError
+from agents.export_agent import ExportAgent, ExportError, build_meaningful_filename
 from agents.validation_agent import ValidationAgent
 from services.file_service import FileService
 from models.enums import FileCategory
@@ -25,6 +25,15 @@ audit_repo = AuditRepository()
 
 
 def render():
+    from repositories.subject_repo import SubjectRepository
+    subj_repo = SubjectRepository()
+    active_subject = subj_repo.get_active_subject()
+    if not active_subject:
+        st.info("👉 Please select a subject to continue.")
+        return
+
+    subject_id = active_subject["subject_id"]
+
     st.markdown("## 👩‍🏫 Faculty Review")
     st.markdown(
         "<div class='confidential-banner'>⚠️ For faculty use only — Do not distribute</div>",
@@ -35,6 +44,7 @@ def render():
     with get_session() as session:
         sets = (
             session.query(PaperSetDB)
+            .filter(PaperSetDB.subject_id == subject_id)
             .order_by(PaperSetDB.generated_at.desc())
             .limit(20)
             .all()
@@ -130,6 +140,7 @@ def _render_set_review(set_info: dict):
                 "generated_id": pq.generated_id,
                 "bloom_justification": pq.bloom_justification,
                 "similarity_status": pq.similarity_status,
+                "valuation_points": pq.valuation_points,
             }
             for pq in pqs
         ]
@@ -137,6 +148,101 @@ def _render_set_review(set_info: dict):
     if not pqs_data:
         st.info("No questions found for this set.")
         return
+
+    # Valuation schemes status & missing scheme generator
+    missing_val_count = sum(1 for pq in pqs_data if not pq.get("valuation_points"))
+    val_status_items = [
+        f"{pq['slot_id']} {'✓' if pq.get('valuation_points') else '⚠'}"
+        for pq in pqs_data
+    ]
+    val_status_str = ", ".join(val_status_items)
+
+    v_col1, v_col2 = st.columns([3, 1])
+    with v_col1:
+        if missing_val_count == 0:
+            st.success(f"**Valuation Schemes:** All {len(pqs_data)} questions complete ({val_status_str})")
+        else:
+            st.warning(f"**Valuation Schemes:** {len(pqs_data) - missing_val_count}/{len(pqs_data)} complete — Missing: {missing_val_count} ({val_status_str})")
+    with v_col2:
+        if missing_val_count > 0:
+            if st.button("⚡ Generate Missing Schemes", key=f"gen_missing_val_{set_id}", use_container_width=True):
+                _generate_missing_valuations(set_id, pqs_data)
+
+    # CHANGE 3: Question Paper Layout Preview
+    # CHANGE 3: Question Paper Layout Preview
+    with st.expander("👁️ Question Paper Layout Preview", expanded=False):
+        is_minor = (exam_type == "MINOR")
+        if is_minor:
+            header_title = "Model Question Paper for Minor Examination (ISA-I)"
+            duration_str = "60 mins"
+            max_marks_str = "30"
+            note_str = "Note: Answer any two full questions. Each full question carries equal marks."
+        else:
+            header_title = "Model Question Paper for End Semester Assessment (ESA)"
+            duration_str = "180 mins"
+            max_marks_str = "100"
+            note_str = "Note: Answer any two full questions from Unit 1 & 2, and one from Unit 3. Each full question carries equal marks."
+
+        from services.pdf_service import _get_sl_no, _get_q_text, _get_marks, _get_co, _get_bl, _get_po, _get_pi_code
+
+        rows_html = ""
+        for pq in sorted(pqs_data, key=lambda q: (q["main_q"], q["part"])):
+            sl_no = _get_sl_no(pq)
+            qt = _get_q_text(pq).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            marks = _get_marks(pq)
+            co = _get_co(pq)
+            bl = _get_bl(pq)
+            po = _get_po(pq)
+            pi_code = _get_pi_code(pq)
+            rows_html += f"""
+            <tr>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{sl_no}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:left;'>{qt}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{marks}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{co}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{bl}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{po}</td>
+                <td style='border:1px solid #000; padding:6px; text-align:center;'>{pi_code}</td>
+            </tr>
+            """
+
+        st.markdown(f"""
+        <div style='background:#ffffff; color:#000000; padding:15px; border:1px solid #94a3b8;'>
+            {f"<div style='text-align:center; color:#dc2626; font-weight:bold; margin-bottom:8px;'>DRAFT — NOT APPROVED — FOR REVIEW ONLY</div>" if status not in ("APPROVED", "EXPORTED") else ""}
+            <table style='width:100%; border-collapse:collapse; border:1px solid #000; margin-bottom:12px; font-size:0.9rem;'>
+                <tr>
+                    <td colspan='2' style='border:1px solid #000; padding:8px; text-align:center; font-weight:bold; font-size:1.05rem;'>{header_title}</td>
+                </tr>
+                <tr>
+                    <td style='border:1px solid #000; padding:6px 10px; width:50%;'><b>Course Code:</b> 26ECAC401</td>
+                    <td style='border:1px solid #000; padding:6px 10px; width:50%;'><b>Course Title:</b> Agentic AI</td>
+                </tr>
+                <tr>
+                    <td style='border:1px solid #000; padding:6px 10px;'><b>Duration:</b> {duration_str}</td>
+                    <td style='border:1px solid #000; padding:6px 10px;'><b>Max. Marks:</b> {max_marks_str}</td>
+                </tr>
+                <tr>
+                    <td colspan='2' style='border:1px solid #000; padding:6px 10px; font-style:italic;'>{note_str}</td>
+                </tr>
+            </table>
+            <table style='width:100%; border-collapse:collapse; border:1px solid #000; font-size:0.85rem;'>
+                <thead>
+                    <tr style='background:#f8fafc; font-weight:bold; text-align:center;'>
+                        <th style='border:1px solid #000; padding:6px; width:7%;'>Sl.No.</th>
+                        <th style='border:1px solid #000; padding:6px; width:57%; text-align:left;'>Questions</th>
+                        <th style='border:1px solid #000; padding:6px; width:7%;'>Marks</th>
+                        <th style='border:1px solid #000; padding:6px; width:7%;'>CO</th>
+                        <th style='border:1px solid #000; padding:6px; width:7%;'>BL</th>
+                        <th style='border:1px solid #000; padding:6px; width:7%;'>PO</th>
+                        <th style='border:1px solid #000; padding:6px; width:8%;'>PI Code</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </div>
+        """, unsafe_allow_html=True)
 
     st.markdown(f"**{len(pqs_data)} questions in this paper**")
     st.markdown("---")
@@ -163,7 +269,6 @@ def _render_question_card(pq: dict, set_id: str, paper_status: str):
     bloom = pq["bloom_level"]
     approval = pq["approval_status"]
 
-    # Source badge
     src_badge = (
         "<span class='badge badge-bank'>QUESTION BANK</span>"
         if source == "QUESTION_BANK"
@@ -184,6 +289,13 @@ def _render_question_card(pq: dict, set_id: str, paper_status: str):
     if pq.get("similarity_status") and pq["similarity_status"] != "OK":
         sim_badge = f"<span class='badge' style='background:#7f1d1d; color:white;'>⚠️ {pq['similarity_status']}</span>"
 
+    val_has = bool(pq.get("valuation_points"))
+    val_badge = (
+        "<span class='badge' style='background:#065f46; color:white;'>Scheme ✓</span>"
+        if val_has
+        else "<span class='badge' style='background:#b45309; color:white;'>Scheme ⚠ Missing</span>"
+    )
+
     with st.container():
         st.markdown(
             f"""
@@ -194,6 +306,7 @@ def _render_question_card(pq: dict, set_id: str, paper_status: str):
                 Ch {pq['chapter_number']}
             </span>
             <span class='badge' style='background:#374151; color:white;'>10 MARKS</span>
+            {val_badge}
             {approval_badge} {sim_badge}
             </div>
             """,
@@ -221,9 +334,12 @@ def _render_question_card(pq: dict, set_id: str, paper_status: str):
                 if st.button("✏️ Edit", key=f"edit_{set_id}_{slot_id}"):
                     st.session_state[f"editing_{set_id}_{slot_id}"] = True
             with col4:
-                if source == "AI_GENERATED":
-                    if st.button("🔄 Regenerate", key=f"regen_{set_id}_{slot_id}"):
-                        st.info("Regenerate: Click Save Draft and re-generate from Paper Generator.")
+                is_regen_running = st.session_state.get(f"is_regenerating_{set_id}_{slot_id}", False)
+                btn_label = "⏳ Regenerating..." if is_regen_running else "🔄 Regenerate Question"
+                if st.button(btn_label, key=f"regen_{set_id}_{slot_id}", disabled=is_regen_running):
+                    st.session_state[f"is_regenerating_{set_id}_{slot_id}"] = True
+                    _regenerate_question(set_id, pq)
+                    st.session_state[f"is_regenerating_{set_id}_{slot_id}"] = False
 
             # Edit mode
             if st.session_state.get(f"editing_{set_id}_{slot_id}"):
@@ -239,6 +355,45 @@ def _render_question_card(pq: dict, set_id: str, paper_status: str):
         st.markdown("")
 
 
+@st.dialog("View Question Paper", width="large")
+def _show_view_paper_dialog(set_id: str, exam_type: str, status: str, pqs_data: list):
+    pset_obj = _build_paper_set_from_db(set_id, exam_type, status, pqs_data)
+    if pset_obj:
+        try:
+            from services.pdf_service import generate_paper_pdf
+            pdf_bytes = generate_paper_pdf(pset_obj, is_draft=(status not in ("APPROVED", "EXPORTED")))
+            import base64
+            base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+            st.markdown(
+                f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="520px" type="application/pdf" style="border:none; border-radius:8px;"></iframe>',
+                unsafe_allow_html=True,
+            )
+        except Exception as exc:
+            st.error(f"Could not render PDF preview: {exc}")
+
+    st.markdown("<div style='display:flex; justify-content:center; margin-top:1rem;'>", unsafe_allow_html=True)
+    all_dlg_approved = all(pq.get("approval_status") == "APPROVED" for pq in pqs_data) or status in ("APPROVED", "EXPORTED")
+    if pset_obj and all_dlg_approved:
+        try:
+            from services.pdf_service import generate_paper_pdf
+            is_draft = (status not in ("APPROVED", "EXPORTED"))
+            pdf_bytes = generate_paper_pdf(pset_obj, is_draft=is_draft)
+            fn = build_meaningful_filename("Paper", exam_type, set_id, "pdf", is_draft=is_draft)
+            st.download_button(
+                "📥 Download QP",
+                data=pdf_bytes,
+                file_name=fn,
+                mime="application/pdf",
+                type="primary",
+                key=f"dlg_dl_qp_btn_{set_id}",
+            )
+        except Exception:
+            pass
+    elif pset_obj and not all_dlg_approved:
+        st.caption("🔒 Question paper download is locked until all questions are approved by faculty.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _render_paper_actions(set_id: str, status: str, exam_type: str, pqs_data: list):
     st.markdown("### Paper Actions")
     col1, col2, col3, col4 = st.columns(4)
@@ -246,67 +401,85 @@ def _render_paper_actions(set_id: str, status: str, exam_type: str, pqs_data: li
     all_approved = all(pq["approval_status"] == "APPROVED" for pq in pqs_data)
     pending_count = sum(1 for pq in pqs_data if pq["approval_status"] == "PENDING")
 
+    is_draft = (status not in ("APPROVED", "EXPORTED"))
+    fn_docx = build_meaningful_filename("Paper", exam_type, set_id, "docx", is_draft=is_draft)
+    fn_pdf = build_meaningful_filename("Paper", exam_type, set_id, "pdf", is_draft=is_draft)
+    fn_scheme_pdf = f"SCHEME_{fn_pdf}"
+
     with col1:
-        if st.button("💾 Save Draft", use_container_width=True):
-            paper_repo.update_set_status(set_id, "UNDER_REVIEW")
-            audit_repo.log("SAVE_DRAFT", paper_set_id=set_id)
-            st.toast("✅ Draft saved!", icon="💾")
-            st.rerun()
+        if st.button("👁 View Paper", use_container_width=True, key=f"btn_view_paper_{set_id}"):
+            _show_view_paper_dialog(set_id, exam_type, status, pqs_data)
+
+    can_download = all_approved or status in ("APPROVED", "EXPORTED")
 
     with col2:
-        if st.button("📋 Request Changes", use_container_width=True):
-            paper_repo.update_set_status(set_id, "CHANGES_REQUESTED")
-            audit_repo.log("CHANGES_REQUESTED", paper_set_id=set_id)
-            st.info("Marked for changes")
-            st.rerun()
+        if can_download:
+            try:
+                docx_bytes = _generate_docx_bytes(set_id, exam_type, status, pqs_data, is_draft=is_draft)
+                st.download_button(
+                    "📥 DOCX",
+                    data=docx_bytes,
+                    file_name=fn_docx,
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                    key=f"action_btn_docx_{set_id}",
+                )
+            except Exception as e:
+                st.button("📥 DOCX", disabled=True, use_container_width=True, key=f"action_btn_docx_dis_{set_id}")
+        else:
+            st.button("🔒 📥 DOCX", disabled=True, use_container_width=True, help="Approve all questions to unlock DOCX download", key=f"action_btn_docx_lock_{set_id}")
 
     with col3:
+        if can_download:
+            try:
+                pset_obj = _build_paper_set_from_db(set_id, exam_type, status, pqs_data)
+                if pset_obj:
+                    from services.pdf_service import generate_paper_pdf
+                    pdf_bytes = generate_paper_pdf(pset_obj, is_draft=is_draft)
+                    st.download_button(
+                        "📄 PDF",
+                        data=pdf_bytes,
+                        file_name=fn_pdf,
+                        mime="application/pdf",
+                        use_container_width=True,
+                        key=f"action_btn_pdf_{set_id}",
+                    )
+                else:
+                    st.button("📄 PDF", disabled=True, use_container_width=True, key=f"action_btn_pdf_dis_{set_id}")
+            except Exception as e:
+                st.button("📄 PDF", disabled=True, use_container_width=True, key=f"action_btn_pdf_err_{set_id}")
+        else:
+            st.button("🔒 📄 PDF", disabled=True, use_container_width=True, help="Approve all questions to unlock PDF download", key=f"action_btn_pdf_lock_{set_id}")
+
+    with col4:
         approve_disabled = not all_approved or status in ("APPROVED", "EXPORTED")
         if st.button(
-            "✅ Approve Set" + (f" ({pending_count} pending)" if pending_count else ""),
+            "Approve All",
             type="primary",
             use_container_width=True,
             disabled=approve_disabled,
+            key=f"action_btn_approve_all_{set_id}",
         ):
             coordinator = CoordinatorAgent()
             coordinator.approve_set(set_id)
             st.toast(f"✅ {set_id} APPROVED!", icon="✅")
             st.rerun()
-        if pending_count > 0:
+        if pending_count > 0 and status not in ("APPROVED", "EXPORTED"):
             st.caption(f"⚠️ {pending_count} question(s) still pending approval")
 
-    with col4:
-        if status in ("APPROVED", "EXPORTED"):
-            try:
-                final_docx = _generate_docx_bytes(set_id, exam_type, status, pqs_data, is_draft=False)
-                st.download_button(
-                    "📤 Final DOCX",
-                    data=final_docx,
-                    file_name=f"{set_id}_FINAL.docx",
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    key=f"final_docx_action_{set_id}",
-                )
-            except Exception as e:
-                st.caption(f"DOCX error: {e}")
-        else:
-            st.button("📤 Final DOCX", disabled=True, use_container_width=True, key=f"final_docx_dis_{set_id}")
-            st.caption("Approve set first")
-
     st.markdown("---")
-    st.markdown("**⬇ Downloads**")
+    st.markdown("**⬇ Downloads & Export**")
     dl1, dl2, dl3, dl4 = st.columns(4)
 
     pset_obj = _build_paper_set_from_db(set_id, exam_type, status, pqs_data)
 
     with dl1:
-        # Draft DOCX — generated in-memory so download_button works immediately
         try:
             docx_bytes = _generate_docx_bytes(set_id, exam_type, status, pqs_data, is_draft=True)
             st.download_button(
                 "📥 Draft DOCX",
                 data=docx_bytes,
-                file_name=f"DRAFT_{set_id}.docx",
+                file_name=fn_draft_docx,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True,
                 key=f"draft_docx_{set_id}",
@@ -322,7 +495,7 @@ def _render_paper_actions(set_id: str, status: str, exam_type: str, pqs_data: li
                 st.download_button(
                     "📄 Draft PDF",
                     data=pdf_bytes,
-                    file_name=f"DRAFT_{set_id}.pdf",
+                    file_name=fn_draft_pdf,
                     mime="application/pdf",
                     use_container_width=True,
                     key=f"draft_pdf_{set_id}",
@@ -339,7 +512,7 @@ def _render_paper_actions(set_id: str, status: str, exam_type: str, pqs_data: li
                     st.download_button(
                         "✅ Final PDF",
                         data=pdf_bytes,
-                        file_name=f"{set_id}_FINAL.pdf",
+                        file_name=fn_final_pdf,
                         mime="application/pdf",
                         use_container_width=True,
                         key=f"final_pdf_{set_id}",
@@ -359,7 +532,7 @@ def _render_paper_actions(set_id: str, status: str, exam_type: str, pqs_data: li
                 st.download_button(
                     "📋 Scheme PDF",
                     data=scheme_bytes,
-                    file_name=f"SCHEME_{set_id}.pdf",
+                    file_name=fn_scheme_pdf,
                     mime="application/pdf",
                     use_container_width=True,
                     key=f"scheme_pdf_{set_id}",
@@ -509,64 +682,117 @@ def _generate_docx_bytes(set_id: str, exam_type: str, status: str, pqs_data: lis
     """Generate DOCX in-memory and return raw bytes for st.download_button."""
     import io
     from docx import Document
-    from docx.shared import Pt, RGBColor
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from models.enums import ExamType
+    from agents.export_agent import _render_tabular_docx
 
-    DRAFT_WATERMARK = "DRAFT — NOT APPROVED — FOR REVIEW ONLY"
-    is_minor = exam_type in ("MINOR", ExamType.MINOR)
-    duration = "75 minutes" if is_minor else "180 minutes"
-    max_marks = "40" if is_minor else "100"
-    exam_label = "Minor / Internal Examination" if is_minor else "End-Semester Examination"
-
+    pset_obj = _build_paper_set_from_db(set_id, exam_type, status, pqs_data)
     doc = Document()
-
-    if is_draft:
-        p = doc.add_paragraph(DRAFT_WATERMARK)
-        p.runs[0].bold = True
-        p.runs[0].font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    dept_p = doc.add_paragraph("Department of Computer Science & Engineering (AI)")
-    dept_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    title_p = doc.add_paragraph(f"Generative AI — {exam_label}")
-    title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_p.runs[0].bold = True
-
-    meta_p = doc.add_paragraph(
-        f"Set: {set_id}   |   Time: {duration}   |   Max Marks: {max_marks}"
-    )
-    meta_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-    instr = (
-        "Answer any TWO complete questions. Each complete question carries 20 marks."
-        if is_minor else
-        "Unit 1 & 2: Answer any TWO complete questions from each unit. "
-        "Unit 3: Answer any ONE complete question. Each complete question carries 20 marks."
-    )
-    doc.add_paragraph(instr)
-    doc.add_paragraph("")
-
-    sorted_pqs = sorted(pqs_data, key=lambda q: (q["main_q"], q["part"]))
-    current_main = None
-    for pq in sorted_pqs:
-        if pq["main_q"] != current_main:
-            current_main = pq["main_q"]
-            h = doc.add_paragraph(f"Q{pq['main_q']}.")
-            h.runs[0].bold = True
-        para = doc.add_paragraph()
-        part_run = para.add_run(f"  ({pq['part']}) ")
-        part_run.bold = True
-        para.add_run(pq["question_text"])
-        marks_run = para.add_run(f"  [{pq['marks']} Marks]")
-        marks_run.bold = True
-
-    if is_minor:
-        doc.add_paragraph("\nAnswer any TWO full questions.")
-    else:
-        doc.add_paragraph("\n[See unit-wise instructions above]")
+    if pset_obj:
+        _render_tabular_docx(doc, pset_obj, is_draft=is_draft, course_name="Agentic AI")
 
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
+
+
+def _regenerate_question(set_id: str, pq: dict):
+    """Regenerate a single question with identical constraints avoiding old text."""
+    st.info(f"Regenerating question {pq['slot_id']} with Ollama...")
+    try:
+        from services.llm_provider import LLMProvider
+        from agents.generation_agent import AIQuestionGenerationAgent
+        from models.enums import BloomLevel
+
+        llm = LLMProvider()
+        agent = AIQuestionGenerationAgent(llm)
+
+        b_level = BloomLevel.L3 if str(pq["bloom_level"]).endswith("L3") else BloomLevel.L2
+
+        new_q = agent.regenerate_question(
+            bloom_level=b_level,
+            unit_number=pq["unit_number"],
+            chapter_number=pq["chapter_number"],
+            chapter_name=pq["chapter_name"],
+            old_question_text=pq["question_text"],
+        )
+
+        if new_q and new_q.question_text:
+            val_json = json.dumps([vp.model_dump() for vp in new_q.valuation_points]) if new_q.valuation_points else None
+            with get_session() as session:
+                db_pq = session.query(PaperQuestionDB).filter(
+                    PaperQuestionDB.paper_set_id == set_id,
+                    PaperQuestionDB.slot_id == pq["slot_id"]
+                ).first()
+                if db_pq:
+                    db_pq.question_text = new_q.question_text
+                    db_pq.bloom_justification = new_q.bloom_justification
+                    db_pq.approval_status = "PENDING"
+                    if val_json:
+                        db_pq.valuation_points = val_json
+                    session.commit()
+
+            audit_repo.log(
+                "QUESTION_REGENERATED",
+                paper_set_id=set_id,
+                details={"slot_id": pq["slot_id"], "old_text": pq["question_text"][:50], "new_text": new_q.question_text[:50]},
+            )
+            st.toast(f"✅ Question {pq['slot_id']} regenerated!", icon="⚡")
+            st.rerun()
+        else:
+            st.error("Failed to regenerate question.")
+    except Exception as exc:
+        st.error(f"Regeneration error: {exc}")
+
+
+def _generate_missing_valuations(set_id: str, pqs_data: list):
+    """Generate valuation schemes for any questions missing them."""
+    st.info("Generating missing valuation schemes with Ollama...")
+    try:
+        from services.llm_provider import LLMProvider
+        from agents.valuation_agent import ValuationAgent
+        from models.paper import PaperQuestion
+        from models.enums import BloomLevel, QuestionSource, ApprovalStatus
+
+        llm = LLMProvider()
+        val_agent = ValuationAgent(llm)
+        count = 0
+
+        for pq in pqs_data:
+            if not pq.get("valuation_points"):
+                b_level = BloomLevel.L3 if str(pq["bloom_level"]).endswith("L3") else BloomLevel.L2
+                src = QuestionSource.QUESTION_BANK if pq["source"] == "QUESTION_BANK" else QuestionSource.AI_GENERATED
+                app_str = pq.get("approval_status", "PENDING")
+                app = ApprovalStatus.APPROVED if app_str == "APPROVED" else (ApprovalStatus.REJECTED if app_str == "REJECTED" else ApprovalStatus.PENDING)
+
+                pq_obj = PaperQuestion(
+                    slot_id=pq["slot_id"],
+                    main_question_number=pq["main_q"],
+                    part=pq["part"],
+                    unit_number=pq["unit_number"],
+                    chapter_number=pq["chapter_number"],
+                    chapter_name=pq["chapter_name"],
+                    question_text=pq["question_text"],
+                    bloom_level=b_level,
+                    marks=pq["marks"],
+                    source=src,
+                    approval_status=app,
+                    question_id=pq.get("question_id"),
+                    generated_id=pq.get("generated_id"),
+                )
+
+                scheme = val_agent.generate_scheme(pq_obj)
+                if scheme and scheme.valuation_points:
+                    val_json = json.dumps([vp.model_dump() for vp in scheme.valuation_points])
+                    with get_session() as session:
+                        db_pq = session.query(PaperQuestionDB).filter(
+                            PaperQuestionDB.paper_set_id == set_id,
+                            PaperQuestionDB.slot_id == pq["slot_id"]
+                        ).first()
+                        if db_pq:
+                            db_pq.valuation_points = val_json
+                            session.commit()
+                    count += 1
+
+        st.toast(f"✅ Generated valuation schemes for {count} question(s)!", icon="✅")
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Valuation generation error: {exc}")

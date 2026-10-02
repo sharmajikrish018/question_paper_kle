@@ -10,6 +10,8 @@ import {
   type MinorConfig,
   type LpParseResult,
   type ParsedUnit,
+  type ExamScheme,
+  type MarkingSchemes,
 } from '@/lib/api'
 import {
   PageHeader, Card, SectionLabel, Alert, Spinner, FileDropzone,
@@ -39,6 +41,7 @@ interface FormState {
   academic_year: string
   units: LocalUnit[]
   minor_configuration: MinorConfig
+  marking_schemes: MarkingSchemes | null
 }
 
 type View = 'list' | 'choose-method' | 'manual-form' | 'lp-upload' | 'lp-review'
@@ -57,6 +60,7 @@ function emptyForm(): FormState {
     academic_year: '',
     units: [],
     minor_configuration: { minor1: [], minor2: [] },
+    marking_schemes: null,
   }
 }
 
@@ -82,6 +86,7 @@ function subjectDetailToForm(s: SubjectDetail): FormState {
       minor1: (s.minor_configuration as Partial<MinorConfig>)?.minor1 ?? [],
       minor2: (s.minor_configuration as Partial<MinorConfig>)?.minor2 ?? [],
     },
+    marking_schemes: s.marking_schemes ?? (s.lp_metadata as { marking_schemes?: MarkingSchemes | null })?.marking_schemes ?? null,
   }
 }
 
@@ -107,6 +112,7 @@ function lpParseToForm(parsed: LpParseResult): FormState {
       minor1: parsed.minor_configuration?.minor1 ?? [],
       minor2: parsed.minor_configuration?.minor2 ?? [],
     },
+    marking_schemes: parsed.marking_schemes ?? null,
   }
 }
 
@@ -135,6 +141,7 @@ function formToSubjectIn(form: FormState, lpMeta?: LpParseResult) {
           raw_text_length: lpMeta.raw_text_preview.length,
         }
       : null,
+    marking_schemes: form.marking_schemes ?? null,
   }
 }
 
@@ -146,6 +153,182 @@ const LP_STEPS = [
   'Detecting units and chapters…',
   'Preparing course setup…',
 ]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Marking Schemes Component
+// ══════════════════════════════════════════════════════════════════════════════
+
+const SCHEME_KEYS: Array<{ key: 'isa1' | 'isa2' | 'esa'; label: string }> = [
+  { key: 'isa1', label: 'ISA-I (Minor 1)' },
+  { key: 'isa2', label: 'ISA-II (Minor 2)' },
+  { key: 'esa',  label: 'ESA (End Semester)' },
+]
+
+const DEFAULT_SCHEME: ExamScheme = {
+  exam_type: '',
+  total_marks: 30,
+  duration: '',
+  instructions: '',
+  total_questions: 3,
+  questions_to_attempt: 2,
+  marks_per_full_question: 15,
+  sub_question_pattern: [],
+}
+
+function MarkingSchemesSection({
+  schemes,
+  onChange,
+}: {
+  schemes: MarkingSchemes | null
+  onChange: (s: MarkingSchemes) => void
+}) {
+  const [editingKey, setEditingKey] = useState<'isa1' | 'isa2' | 'esa' | null>(null)
+  const [draft, setDraft] = useState<ExamScheme>(DEFAULT_SCHEME)
+
+  function openEdit(key: 'isa1' | 'isa2' | 'esa') {
+    const current = schemes?.[key] ?? {
+      ...DEFAULT_SCHEME,
+      exam_type: key === 'isa1' ? 'ISA-I' : key === 'isa2' ? 'ISA-II' : 'ESA',
+    }
+    setDraft({ ...current })
+    setEditingKey(key)
+  }
+
+  function saveDraft() {
+    if (!editingKey) return
+    onChange({
+      isa1: schemes?.isa1 ?? null,
+      isa2: schemes?.isa2 ?? null,
+      esa:  schemes?.esa  ?? null,
+      [editingKey]: { ...draft },
+    })
+    setEditingKey(null)
+  }
+
+  function numField(label: string, field: keyof ExamScheme, min = 0) {
+    return (
+      <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+        <label className="form-label" style={{ fontSize: '0.8125rem' }}>{label}</label>
+        <input
+          className="form-input"
+          type="number"
+          min={min}
+          value={(draft[field] as number) ?? 0}
+          onChange={e => setDraft({ ...draft, [field]: Number(e.target.value) })}
+        />
+      </div>
+    )
+  }
+
+  function textField(label: string, field: keyof ExamScheme) {
+    return (
+      <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+        <label className="form-label" style={{ fontSize: '0.8125rem' }}>{label}</label>
+        <input
+          className="form-input"
+          value={(draft[field] as string) ?? ''}
+          onChange={e => setDraft({ ...draft, [field]: e.target.value })}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <SectionLabel>Examination Marking Schemes</SectionLabel>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+        {SCHEME_KEYS.map(({ key, label }) => {
+          const s = schemes?.[key]
+          return (
+            <Card key={key} style={{ position: 'relative', padding: '1.25rem' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.9375rem', marginBottom: '0.75rem', color: 'var(--blue)' }}>
+                {label}
+              </div>
+              {s ? (
+                <div style={{ fontSize: '0.8125rem', lineHeight: 1.7 }}>
+                  <div><strong>Total Marks:</strong> {s.total_marks}</div>
+                  <div><strong>Full Questions:</strong> {s.total_questions}</div>
+                  <div><strong>Questions to Attempt:</strong> {s.questions_to_attempt}</div>
+                  <div><strong>Marks per Full Question:</strong> {s.marks_per_full_question}</div>
+                  {s.sub_question_pattern.length > 0 && (
+                    <div style={{ marginTop: '0.35rem' }}>
+                      <strong>Sub-question marks:</strong>
+                      <div style={{ paddingLeft: '0.75rem', marginTop: '0.15rem', color: 'var(--text-2)' }}>
+                        {s.sub_question_pattern.map((m, idx) => (
+                          <div key={idx}>{String.fromCharCode(97 + idx)} → {m} marks</div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {s.duration && <div style={{ marginTop: '0.25rem' }}><strong>Duration:</strong> {s.duration}</div>}
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                  Not extracted — click Edit to configure.
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => openEdit(key)}
+                style={{ marginTop: '1rem', width: '100%' }}
+              >
+                ✏️ Edit
+              </button>
+            </Card>
+          )
+        })}
+      </div>
+
+      {/* Edit modal */}
+      {editingKey && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+        }}>
+          <div style={{
+            background: 'var(--card)', borderRadius: '12px', padding: '2rem',
+            width: '480px', maxHeight: '85vh', overflowY: 'auto',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+          }}>
+            <div style={{ fontWeight: 700, fontSize: '1.125rem', marginBottom: '1.5rem' }}>
+              Edit Marking Scheme — {SCHEME_KEYS.find(k => k.key === editingKey)?.label}
+            </div>
+            {numField('Total Marks', 'total_marks', 1)}
+            {numField('Full Questions (Printed)', 'total_questions', 1)}
+            {numField('Questions to Attempt', 'questions_to_attempt', 1)}
+            {numField('Marks per Full Question', 'marks_per_full_question', 1)}
+            {textField('Duration (e.g. 75 minutes)', 'duration')}
+            {textField('Instructions', 'instructions')}
+            <div className="form-group" style={{ marginBottom: '0.75rem' }}>
+              <label className="form-label" style={{ fontSize: '0.8125rem' }}>
+                Sub-question marks pattern (comma-separated, e.g. 10, 5)
+              </label>
+              <input
+                className="form-input"
+                value={draft.sub_question_pattern.join(', ')}
+                onChange={e => {
+                  const vals = e.target.value.split(',').map(v => parseInt(v.trim(), 10)).filter(n => !isNaN(n))
+                  setDraft({ ...draft, sub_question_pattern: vals })
+                }}
+                placeholder="e.g. 10, 5"
+              />
+              {draft.sub_question_pattern.length > 0 && (
+                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  Total per full question: {draft.sub_question_pattern.reduce((a, b) => a + b, 0)} marks
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end gap-3" style={{ marginTop: '1.5rem' }}>
+              <button type="button" className="btn btn-secondary" onClick={() => setEditingKey(null)}>Cancel</button>
+              <button type="button" className="btn btn-primary" onClick={saveDraft}>✓ Save Scheme</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Subject Form Component
@@ -280,8 +463,8 @@ function SubjectForm({
         <div className="form-row">
           <div className="form-group" style={{ marginBottom: 0 }}>
             <label className="form-label">
-              Course Name
-              {form.course_name === '' && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem' }}>⚠ needs input</span>}
+              Course Name <span style={{ color: 'var(--red)' }}>*</span>
+              {!form.course_name.trim() && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ needs input</span>}
             </label>
             <input
               className="form-input"
@@ -291,7 +474,10 @@ function SubjectForm({
             />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Course Code</label>
+            <label className="form-label">
+              Course Code <span style={{ color: 'var(--red)' }}>*</span>
+              {!form.course_code.trim() && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ required</span>}
+            </label>
             <input
               className="form-input"
               value={form.course_code}
@@ -302,7 +488,10 @@ function SubjectForm({
         </div>
         <div className="form-row" style={{ marginTop: '1rem' }}>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Department</label>
+            <label className="form-label">
+              Department <span style={{ color: 'var(--red)' }}>*</span>
+              {!form.department.trim() && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ required</span>}
+            </label>
             <input
               className="form-input"
               value={form.department}
@@ -311,20 +500,27 @@ function SubjectForm({
             />
           </div>
           <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Semester</label>
+            <label className="form-label">
+              Semester <span style={{ color: 'var(--red)' }}>*</span>
+              {!form.semester.trim() && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ please select</span>}
+            </label>
             <select
               className="form-select"
               value={form.semester}
               onChange={e => setForm({ ...form, semester: e.target.value })}
+              style={{ borderColor: !form.semester.trim() ? 'var(--orange)' : undefined }}
             >
               {['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th'].map(s => (
-                <option key={s} value={s}>{s || 'Select semester'}</option>
+                <option key={s} value={s}>{s ? `${s} Semester` : '— Select Semester —'}</option>
               ))}
             </select>
           </div>
         </div>
         <div className="form-group" style={{ marginTop: '1rem', marginBottom: 0 }}>
-          <label className="form-label">Academic Year</label>
+          <label className="form-label">
+            Academic Year <span style={{ color: 'var(--red)' }}>*</span>
+            {!form.academic_year.trim() && <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ required</span>}
+          </label>
           <input
             className="form-input"
             value={form.academic_year}
@@ -476,7 +672,10 @@ function SubjectForm({
             {(['minor1', 'minor2'] as const).map(which => (
               <div key={which}>
                 <div className="form-label" style={{ marginBottom: '0.75rem' }}>
-                  {which === 'minor1' ? 'Minor 1' : 'Minor 2'} — select units covered
+                  {which === 'minor1' ? 'Minor 1' : 'Minor 2'} — select units covered <span style={{ color: 'var(--red)' }}>*</span>
+                  {form.minor_configuration[which].length === 0 && (
+                    <span style={{ color: 'var(--orange)', marginLeft: '0.4rem', fontSize: '0.78rem' }}>⚠ select at least one unit</span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                   {form.units.map(u => (
@@ -505,6 +704,12 @@ function SubjectForm({
           This mapping is subject-specific and does not affect other subjects.
         </div>
       </Card>
+
+      {/* ── Examination Marking Schemes ── */}
+      <MarkingSchemesSection
+        schemes={form.marking_schemes}
+        onChange={s => setForm({ ...form, marking_schemes: s })}
+      />
 
       {/* Bottom actions */}
       <div className="flex justify-end gap-3">
@@ -613,10 +818,64 @@ export default function CoursePage() {
 
   // ── Save subject ────────────────────────────────────────────────────────────
   async function saveSubject() {
+    // 1. Course Name
     if (!form.course_name.trim()) {
-      showMsg('Course Name is required.', 'error')
+      showMsg('Please enter the Course Name.', 'error')
       return
     }
+    // 2. Course Code
+    if (!form.course_code.trim()) {
+      showMsg('Please enter the Course Code.', 'error')
+      return
+    }
+    // 3. Department
+    if (!form.department.trim()) {
+      showMsg('Please enter the Department.', 'error')
+      return
+    }
+    // 4. Semester (user requirement: "eg select sem then ask them to select then allow save subject")
+    if (!form.semester.trim()) {
+      showMsg('Please select the Semester before saving.', 'error')
+      return
+    }
+    // 5. Academic Year
+    if (!form.academic_year.trim()) {
+      showMsg('Please enter the Academic Year.', 'error')
+      return
+    }
+    // 6. Units and Chapters
+    if (form.units.length === 0) {
+      showMsg('Please add at least one Unit to the course syllabus.', 'error')
+      return
+    }
+    for (const u of form.units) {
+      if (!u.title.trim()) {
+        showMsg(`Please enter a title for Unit ${u.unit_number}.`, 'error')
+        return
+      }
+      if (u.chapters.length === 0) {
+        showMsg(`Please add at least one chapter to Unit ${u.unit_number} ("${u.title}").`, 'error')
+        return
+      }
+      for (const ch of u.chapters) {
+        if (!ch.title.trim()) {
+          showMsg(`Please enter a title for Chapter ${ch.chapter_number} in Unit ${u.unit_number}.`, 'error')
+          return
+        }
+      }
+    }
+    // 7. Minor Configuration mapping
+    const m1 = form.minor_configuration.minor1 || []
+    const m2 = form.minor_configuration.minor2 || []
+    if (m1.length === 0) {
+      showMsg('Please select at least one unit for Minor 1 in Minor Exam Configuration.', 'error')
+      return
+    }
+    if (m2.length === 0) {
+      showMsg('Please select at least one unit for Minor 2 in Minor Exam Configuration.', 'error')
+      return
+    }
+
     setSaving(true)
     try {
       const payload = formToSubjectIn(form, lpResult ?? undefined)
@@ -911,6 +1170,57 @@ export default function CoursePage() {
                   </Card>
                 </>
               )}
+
+              {/* Examination Marking Schemes */}
+              <SectionLabel style={{ marginTop: '1.5rem' }}>Examination Marking Schemes</SectionLabel>
+              {(() => {
+                const schemes = selectedSubject.marking_schemes ?? (selectedSubject.lp_metadata as { marking_schemes?: MarkingSchemes | null })?.marking_schemes
+                return (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '1.5rem' }}>
+                    {SCHEME_KEYS.map(({ key, label }) => {
+                      const s = schemes?.[key]
+                      return (
+                        <Card key={key} style={{ padding: '1.25rem' }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.9375rem', marginBottom: '0.75rem', color: 'var(--blue)' }}>
+                            {label}
+                          </div>
+                          {s ? (
+                            <div style={{ fontSize: '0.8125rem', lineHeight: 1.7 }}>
+                              <div><strong>Total Marks:</strong> {s.total_marks}</div>
+                              <div><strong>Full Questions:</strong> {s.total_questions}</div>
+                              <div><strong>Questions to Attempt:</strong> {s.questions_to_attempt}</div>
+                              <div><strong>Marks per Full Question:</strong> {s.marks_per_full_question}</div>
+                              {s.sub_question_pattern?.length > 0 && (
+                                <div style={{ marginTop: '0.35rem' }}>
+                                  <strong>Sub-question marks:</strong>
+                                  <div style={{ paddingLeft: '0.75rem', marginTop: '0.15rem', color: 'var(--text-2)' }}>
+                                    {s.sub_question_pattern.map((m, idx) => (
+                                      <div key={idx}>{String.fromCharCode(97 + idx)} → {m} marks</div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                              {s.duration && <div style={{ marginTop: '0.25rem' }}><strong>Duration:</strong> {s.duration}</div>}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: '0.8125rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                              Not configured.
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={startEdit}
+                            style={{ marginTop: '1rem', width: '100%' }}
+                          >
+                            ✏️ Edit
+                          </button>
+                        </Card>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
 
               {/* Other subjects */}
               {subjects.length > 1 && (

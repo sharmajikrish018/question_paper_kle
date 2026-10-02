@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { SubjectSwitcher } from './SubjectSwitcher'
 
 const NAV = [
   { href: '/',            label: 'Dashboard' },
@@ -24,6 +25,9 @@ export function Sidebar() {
         <div className="sidebar-brand-name">Prashnopatra</div>
         <div className="sidebar-brand-sub">AI Question Paper Agent</div>
       </div>
+
+      {/* Subject Switcher — compact dropdown in sidebar */}
+      <SubjectSwitcher variant="sidebar" />
 
       <nav className="sidebar-nav">
         {NAV.map(({ href, label }) => {

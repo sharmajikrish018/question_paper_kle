@@ -41,6 +41,7 @@ SET_LABELS = ["SET-A", "SET-B", "SET-C", "SET-D", "SET-E"]
 class GenerationRequest:
     """Input parameters for a complete paper generation run."""
     exam_type: ExamType
+    subject_id: str = "default-subject"
     num_sets: int = 1
     l2_percent: int = 50
     l3_percent: int = 50
@@ -54,6 +55,8 @@ class GenerationRequest:
     lesson_plan_text: str = ""
     unit_chapter_map: dict = field(default_factory=dict)
     exclude_used_question_ids: bool = True
+    marking_scheme: Optional[dict] = None
+    exam_subtype: Optional[str] = None
 
 
 @dataclass
@@ -123,6 +126,8 @@ class CoordinatorAgent:
                 unit_allocations=request.unit_allocations,
                 random_seed=request.random_seed,
                 tolerance_percent=request.tolerance_percent,
+                marking_scheme=request.marking_scheme,
+                exam_subtype=request.exam_subtype,
             )
             result.blueprints.append(blueprint)
             self._audit("BLUEPRINT_BUILT", request_id=request_id, details={"type": str(type(blueprint).__name__)})
@@ -134,7 +139,7 @@ class CoordinatorAgent:
         # ── Step 2: Get used question IDs for exclusion ────────────────────────
         used_globally: set[str] = set()
         if request.exclude_used_question_ids:
-            used_globally = self._paper_repo.get_used_question_ids()
+            used_globally = self._paper_repo.get_used_question_ids(subject_id=request.subject_id)
 
         # Track IDs used across sets in this run
         used_in_run: set[str] = set()
@@ -146,7 +151,10 @@ class CoordinatorAgent:
 
         # Generate a short timestamp suffix so each run produces unique IDs
         run_ts = datetime.utcnow().strftime("%H%M%S")
-        exam_prefix = "MINOR" if is_minor else "ENDSEM"
+        if request.exam_subtype:
+            exam_prefix = request.exam_subtype.replace("-", "").upper()
+        else:
+            exam_prefix = "MINOR" if is_minor else "ENDSEM"
 
         for set_idx in range(request.num_sets):
             label = SET_LABELS[set_idx] if set_idx < len(SET_LABELS) else chr(65 + set_idx)
@@ -158,11 +166,11 @@ class CoordinatorAgent:
             # ── Step 3a: Select bank questions ────────────────────────────────
             if is_minor:
                 sel_result = self._selection_agent.select_for_minor(
-                    blueprint, used_globally | used_in_run, rng
+                    blueprint, used_globally | used_in_run, rng, subject_id=request.subject_id
                 )
             else:
                 sel_result = self._selection_agent.select_for_end_sem(
-                    blueprint, used_globally | used_in_run, rng
+                    blueprint, used_globally | used_in_run, rng, subject_id=request.subject_id
                 )
 
             if not sel_result.success:
@@ -173,6 +181,11 @@ class CoordinatorAgent:
                 continue
 
             bank_questions = list(sel_result.selected.values())
+            # Ensure subject_id isolation for bank questions
+            bank_questions = [
+                q for q in bank_questions
+                if getattr(q, 'subject_id', request.subject_id) == request.subject_id
+            ]
             for bq in bank_questions:
                 used_in_run.add(bq.question_id)
 
@@ -189,6 +202,7 @@ class CoordinatorAgent:
                     question_bank_sample=bank_sample_texts,
                     used_texts=used_texts_for_gen,
                     unit_chapter_map=request.unit_chapter_map,
+                    subject_name=request.course_name,
                 )
             else:
                 # Build per-unit AI slots
@@ -199,6 +213,7 @@ class CoordinatorAgent:
                     question_bank_sample=bank_sample_texts,
                     used_texts=used_texts_for_gen,
                     unit_chapter_map=request.unit_chapter_map,
+                    subject_name=request.course_name,
                 )
 
             generated_texts_all.extend(q.question_text for q in ai_questions)
@@ -226,7 +241,7 @@ class CoordinatorAgent:
             # ── Step 3d: Generate valuation schemes ───────────────────────────
             for pq in paper_set.questions:
                 try:
-                    scheme = self._valuation_agent.generate_scheme(pq)
+                    scheme = self._valuation_agent.generate_scheme(pq, subject_id=request.subject_id)
                     pq.valuation_scheme = scheme
                 except Exception as exc:
                     result.warnings.append(
@@ -280,9 +295,10 @@ class CoordinatorAgent:
                 selected_chapters=request.selected_chapters,
                 model_provider=self._settings.llm_provider,
                 model_name=self._settings.resolved_llm_model,
+                subject_id=request.subject_id,
             )
             for ps in generated_sets:
-                self._paper_repo.save_set(ps, request_id)
+                self._paper_repo.save_set(ps, request_id, subject_id=request.subject_id)
         except Exception as exc:
             result.warnings.append(f"Database persistence warning: {exc}")
 

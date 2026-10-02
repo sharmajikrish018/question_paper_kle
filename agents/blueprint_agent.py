@@ -33,13 +33,15 @@ class BlueprintAgent:
         unit_allocations: Optional[list[dict]] = None,
         random_seed: Optional[int] = None,
         tolerance_percent: int = 5,
+        marking_scheme: Optional[dict] = None,
+        exam_subtype: Optional[str] = None,
     ) -> MinorBlueprint | EndSemBlueprint:
         """
         Build and return the appropriate blueprint.
         """
         logger.info(
-            f"Building {exam_type} blueprint: L2={l2_percent}% L3={l3_percent}% "
-            f"seed={random_seed}"
+            f"Building {exam_type} ({exam_subtype}) blueprint: L2={l2_percent}% L3={l3_percent}% "
+            f"seed={random_seed} scheme={'custom' if marking_scheme else 'default'}"
         )
         if exam_type in (ExamType.MINOR, "MINOR"):
             return self._service.build_minor(
@@ -48,6 +50,8 @@ class BlueprintAgent:
                 selected_chapters=selected_chapters,
                 random_seed=random_seed,
                 tolerance_percent=tolerance_percent,
+                marking_scheme=marking_scheme,
+                exam_subtype=exam_subtype or "ISA-I",
             )
         else:
             return self._service.build_end_sem(
@@ -56,4 +60,6 @@ class BlueprintAgent:
                 unit_allocations=unit_allocations,
                 random_seed=random_seed,
                 tolerance_percent=tolerance_percent,
+                marking_scheme=marking_scheme,
+                exam_subtype=exam_subtype or "ESA",
             )

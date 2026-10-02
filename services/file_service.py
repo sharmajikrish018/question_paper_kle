@@ -54,12 +54,20 @@ class FileService:
             name = "uploaded_file"
         return name
 
-    def _category_dir(self, category: FileCategory) -> Path:
-        mapping = {
-            FileCategory.QUESTION_BANK: self._settings.question_bank_dir,
-            FileCategory.LESSON_PLAN: self._settings.lesson_plan_dir,
-            FileCategory.UNIVERSITY_TEMPLATE: self._settings.university_templates_dir,
-        }
+    def _category_dir(self, category: FileCategory, subject_id: Optional[str] = None) -> Path:
+        if subject_id:
+            base = self._settings.data_dir / "subjects" / subject_id
+            mapping = {
+                FileCategory.QUESTION_BANK: base / "question_bank",
+                FileCategory.LESSON_PLAN: base / "lesson_plan",
+                FileCategory.UNIVERSITY_TEMPLATE: self._settings.university_templates_dir,  # shared
+            }
+        else:
+            mapping = {
+                FileCategory.QUESTION_BANK: self._settings.question_bank_dir,
+                FileCategory.LESSON_PLAN: self._settings.lesson_plan_dir,
+                FileCategory.UNIVERSITY_TEMPLATE: self._settings.university_templates_dir,
+            }
         return mapping[category]
 
     def validate_and_save(
@@ -67,6 +75,7 @@ class FileService:
         source_bytes: bytes,
         original_filename: str,
         category: FileCategory,
+        subject_id: Optional[str] = None,
     ) -> Path:
         """
         Validate and save uploaded file bytes.
@@ -91,7 +100,7 @@ class FileService:
             )
 
         safe_name = self._sanitize_filename(original_filename)
-        dest_dir = self._category_dir(category)
+        dest_dir = self._category_dir(category, subject_id=subject_id)
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / safe_name
 
@@ -107,9 +116,9 @@ class FileService:
         logger.info(f"Saved {category.value} file: {dest_path}")
         return dest_path
 
-    def list_files(self, category: FileCategory) -> list[Path]:
+    def list_files(self, category: FileCategory, subject_id: Optional[str] = None) -> list[Path]:
         """List all non-gitkeep files in a category directory."""
-        d = self._category_dir(category)
+        d = self._category_dir(category, subject_id=subject_id)
         if not d.exists():
             return []
         return sorted(
@@ -117,7 +126,7 @@ class FileService:
             if p.is_file() and p.name != ".gitkeep"
         )
 
-    def delete_file(self, path: Path) -> None:
+    def delete_file(self, path: Path, subject_id: Optional[str] = None) -> None:
         """Safely delete a file within the data directories."""
         settings = self._settings
         allowed_roots = [
@@ -125,6 +134,8 @@ class FileService:
             settings.lesson_plan_dir,
             settings.university_templates_dir,
         ]
+        if subject_id:
+            allowed_roots.append(settings.data_dir / "subjects" / subject_id)
         resolved = path.resolve()
         is_allowed = any(
             str(resolved).startswith(str(root.resolve()))
@@ -145,3 +156,11 @@ class FileService:
             if f.suffix.lower() == ".docx":
                 return f
         return None
+
+    def delete_subject_files(self, subject_id: str) -> None:
+        """Remove all files stored under data/subjects/<subject_id>/."""
+        import shutil as _shutil
+        subject_dir = self._settings.data_dir / "subjects" / subject_id
+        if subject_dir.exists():
+            _shutil.rmtree(subject_dir, ignore_errors=True)
+            logger.info(f"Deleted subject files: {subject_dir}")

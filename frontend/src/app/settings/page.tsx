@@ -1,13 +1,39 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { api } from '@/lib/api'
+import { api, type SubjectListItem, type SubjectDetail } from '@/lib/api'
 import { PageHeader, SectionLabel, Card, Alert, Spinner } from '@/components/ui'
 
 export default function SettingsPage() {
   const [health, setHealth] = useState<{ status: string; message?: string; model?: string } | null>(null)
   const [checkingHealth, setCheckingHealth] = useState(false)
   const [msg, setMsg] = useState('')
+
+  const [subjectsList, setSubjectsList] = useState<SubjectListItem[]>([])
+  const [activeSubject, setActiveSubject] = useState<SubjectDetail | null>(null)
+  const [selectedDeleteId, setSelectedDeleteId] = useState<string>('')
+  const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    loadSubjectData()
+  }, [])
+
+  async function loadSubjectData() {
+    try {
+      const list = await api.listSubjects()
+      setSubjectsList(list)
+      const { active_subject_id } = await api.getActiveSubjectId()
+      if (active_subject_id) {
+        setSelectedDeleteId(active_subject_id)
+        const detail = await api.getSubject(active_subject_id).catch(() => null)
+        if (detail) setActiveSubject(detail)
+      } else if (list.length > 0) {
+        setSelectedDeleteId(list[0].subject_id)
+        const detail = await api.getSubject(list[0].subject_id).catch(() => null)
+        if (detail) setActiveSubject(detail)
+      }
+    } catch (_) {}
+  }
 
   async function checkHealth() {
     setCheckingHealth(true)
@@ -17,9 +43,40 @@ export default function SettingsPage() {
     } finally { setCheckingHealth(false) }
   }
 
+  async function handleDeleteSubject() {
+    if (!selectedDeleteId) return
+    const subj = subjectsList.find(s => s.subject_id === selectedDeleteId)
+    const name = subj ? subj.course_name : selectedDeleteId
+
+    const confirmed = window.confirm(
+      `Are you ABSOLUTELY SURE you want to delete "${name}"?\n\n` +
+      `This will permanently delete ALL data for this subject:\n` +
+      `• All Question Bank items & AI Generated questions\n` +
+      `• All Question Paper sets, schemes & validation reports\n` +
+      `• Lesson Plan & Course structure information\n` +
+      `• Usage history and audit logs\n\n` +
+      `This action CANNOT be undone.`
+    )
+    if (!confirmed) return
+
+    setDeleting(true)
+    try {
+      await api.deleteSubject(selectedDeleteId)
+      setMsg(`✅ Subject "${name}" and all associated data deleted successfully.`)
+      await loadSubjectData()
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('activeSubjectChanged', { detail: { subjectId: selectedDeleteId } }))
+      }
+    } catch (err: unknown) {
+      alert(`Delete failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <>
-      <PageHeader title="Settings" subtitle="LLM configuration, privacy controls, and paper rules" />
+      <PageHeader title="Settings" subtitle="LLM configuration, privacy controls, paper rules, and subject management" />
 
       {msg && <Alert variant="success">{msg}</Alert>}
 
@@ -81,6 +138,54 @@ export default function SettingsPage() {
         <div className="confidential mt-4" style={{ textAlign: 'left' }}>
           ⚠ CONFIDENTIAL — Unauthorized access or distribution is strictly prohibited
         </div>
+      </Card>
+
+      {/* Danger Zone: Delete Subject */}
+      <SectionLabel style={{ marginTop: '1.5rem' }}>Danger Zone — Delete Subject</SectionLabel>
+      <Card style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(239, 68, 68, 0.03)' }}>
+        <div className="flex justify-between items-start" style={{ flexWrap: 'wrap', gap: '1rem' }}>
+          <div style={{ flex: 1, minWidth: 260 }}>
+            <div className="font-bold text-red mb-1" style={{ fontSize: '1rem', color: 'var(--red)' }}>
+              Delete Subject &amp; All Associated Data
+            </div>
+            <div className="text-sm text-muted" style={{ lineHeight: 1.6 }}>
+              Select a subject to permanently delete. Deleting a subject will destroy its <strong>question bank, paper sets, lesson plans, valuation schemes, and audit history</strong>.
+            </div>
+            {subjectsList.length > 0 && (
+              <div className="mt-3 flex items-center gap-2" style={{ marginTop: '0.75rem' }}>
+                <label htmlFor="delete-subject-select" className="text-xs font-semibold text-muted">Subject to delete:</label>
+                <select
+                  id="delete-subject-select"
+                  className="form-select"
+                  style={{ maxWidth: 280, padding: '0.35rem 0.65rem', fontSize: '0.82rem', borderColor: 'var(--border)' }}
+                  value={selectedDeleteId}
+                  onChange={e => setSelectedDeleteId(e.target.value)}
+                >
+                  {subjectsList.map(s => (
+                    <option key={s.subject_id} value={s.subject_id}>
+                      {s.course_name} {s.course_code ? `(${s.course_code})` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+          <div>
+            <button
+              className="btn btn-danger"
+              onClick={handleDeleteSubject}
+              disabled={deleting || subjectsList.length <= 1}
+              style={{ padding: '0.5rem 1.25rem' }}
+            >
+              {deleting ? <Spinner size={14} /> : '🗑 Delete Subject'}
+            </button>
+          </div>
+        </div>
+        {subjectsList.length <= 1 && (
+          <div className="alert alert-warning mt-3" style={{ fontSize: '0.78rem', marginTop: '0.75rem' }}>
+            ℹ️ Cannot delete the last remaining subject. At least one subject must remain configured in Prashnopatra.
+          </div>
+        )}
       </Card>
 
       {/* About */}

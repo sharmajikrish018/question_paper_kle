@@ -53,25 +53,27 @@ class QuestionSelectionAgent:
         blueprint: MinorBlueprint,
         used_across_sets: set[str],
         rng: random.Random,
+        subject_id: Optional[str] = None,
     ) -> SelectionResult:
         """
         Select 4 bank questions for a Minor paper set.
         Slots: 2 L2 + 2 L3, spread across selected chapters.
         """
         slots = self._build_minor_bank_slots(blueprint)
-        return self._solve(slots, used_across_sets, rng, blueprint.selected_chapters)
+        return self._solve(slots, used_across_sets, rng, blueprint.selected_chapters, subject_id=subject_id)
 
     def select_for_end_sem(
         self,
         blueprint: EndSemBlueprint,
         used_across_sets: set[str],
         rng: random.Random,
+        subject_id: Optional[str] = None,
     ) -> SelectionResult:
         """
         Select 11 bank questions for an End-Semester paper.
         """
         slots = self._build_endsem_bank_slots(blueprint)
-        return self._solve(slots, used_across_sets, rng, chapter_filter=None)
+        return self._solve(slots, used_across_sets, rng, chapter_filter=None, subject_id=subject_id)
 
     # ── Slot builders ─────────────────────────────────────────────────────────
 
@@ -132,6 +134,7 @@ class QuestionSelectionAgent:
         used_globally: set[str],
         rng: random.Random,
         chapter_filter: Optional[list[int]],
+        subject_id: Optional[str] = None,
     ) -> SelectionResult:
         """
         Greedy solver with shuffle for determinism under seed.
@@ -148,6 +151,7 @@ class QuestionSelectionAgent:
 
             # Wider search if chapter not specific
             candidates = self._bank_agent.get_available_questions(
+                subject_id=subject_id,
                 unit_number=unit_arg,
                 chapter_number=ch_arg,
                 bloom_level=slot.bloom_level.value,
@@ -160,6 +164,7 @@ class QuestionSelectionAgent:
                     f"No candidates for slot {slot.slot_id} ch={ch_arg} — widening"
                 )
                 candidates = self._bank_agent.get_available_questions(
+                    subject_id=subject_id,
                     unit_number=unit_arg,
                     bloom_level=slot.bloom_level.value,
                     exclude_ids=list(used_globally | used_in_this_call),

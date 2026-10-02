@@ -1,550 +1,265 @@
-# Prashnopatra — AI Question Paper Agent
+# Prashnopatra
 
-> ⚠️ **CONFIDENTIAL** — Question papers are restricted academic documents. Do not distribute or commit generated output files.
-
-**Prashnopatra** is an agentic system that assists university faculty in generating compliant, validated question papers for the **Generative AI** course. It sources questions from an approved question bank (~70%) and generates the remainder via LLM (~30%), enforces Bloom taxonomy compliance, routes papers through a faculty approval gate, and exports to DOCX and PDF.
-
-The system is a **faculty coordination assistant**, not an autonomous authority. No paper becomes final until explicitly approved by faculty.
+**Prashnopatra** is an AI-powered Question Paper Setting and Validation Agent designed for university faculty. It automates syllabus-grounded question paper creation by combining approved questions from institutional question banks (~70%) with curriculum-aligned LLM generation (~30%). The system enforces Bloom's taxonomy distributions, parses lesson plan marking schemes, runs automated 10-rule institutional compliance validation, and guarantees complete academic integrity through a human-in-the-loop Faculty Review gate before final DOCX and PDF export.
 
 ---
 
-## Table of Contents
+## Quick Start
 
-- [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Prerequisites](#prerequisites)
-- [Setup](#setup)
-- [Configuration](#configuration)
-- [Running the App](#running-the-app)
-- [Usage Workflow](#usage-workflow)
-- [Examination Patterns](#examination-patterns)
-- [Question Bank Schema](#question-bank-schema)
-- [Project Structure](#project-structure)
-- [API Reference](#api-reference)
-- [Testing](#testing)
-- [Troubleshooting](#troubleshooting)
+### Windows
+
+```powershell
+.\install.ps1
+```
+
+After installation finishes:
+
+```powershell
+.\start.ps1
+```
+
+### macOS & Linux
+
+```bash
+chmod +x ./install.sh ./start.sh
+./install.sh
+```
+
+After installation finishes:
+
+```bash
+./start.sh
+```
+
+> The commands above are the **only** commands required to set up and run Prashnopatra. All dependencies, virtual environments, database migrations, model downloads, and services are managed automatically.
 
 ---
 
-## Architecture
+## System Requirements
 
-```
-Browser (Next.js 16)
-        │  HTTP / REST
-        ▼
-FastAPI + Uvicorn  (api/)
-        │
-        ▼
-CoordinatorAgent  (agents/coordinator.py)
-│
-├── IntakeAgent          — Extracts chapter/unit structure from lesson plan PDF/DOCX
-├── QuestionBankAgent    — Validates, normalises, deduplicates the approved bank
-├── BlueprintAgent       — Converts UI parameters into an immutable generation blueprint
-├── SelectionAgent       — Greedy constraint-based bank question selection
-├── GenerationAgent      — LLM-powered question generation grounded in lesson plan
-├── SimilarityAgent      — Layered duplicate detection (exact → TF-IDF → embeddings)
-├── CompositionAgent     — Assigns questions to Q1(a)/Q1(b)/… slots
-├── ValuationAgent       — Generates 10-mark scheme per question via LLM
-├── ValidationAgent      — Rules-based paper validation (PASS / WARN / FAIL)
-└── ExportAgent          — DOCX + PDF export with faculty-approval gate
-```
-
-**Only** generation, semantic classification, and valuation tasks call the LLM.  
-All arithmetic, slot assignment, duplicate detection, validation, and approval enforcement is deterministic Python.
+| Prerequisite | Requirement | Notes |
+| :--- | :--- | :--- |
+| **Operating System** | Windows 10/11, macOS 12+, or modern Linux | Fully tested on Windows & Linux |
+| **Git** | Latest stable | Required to clone the repository |
+| **Python** | **3.11** or higher (3.11 / 3.12 recommended) | Check with `python --version` |
+| **Node.js** | **18.0** or higher (**20+ LTS** recommended) | Bundled with `npm` |
+| **Ollama** *(Recommended)* | Latest release with `qwen3:8b` | Enables 100% local, offline AI generation |
+| **Memory (RAM)** | 8 GB minimum (16 GB recommended for local LLM) | 4 GB is sufficient in Mock mode |
 
 ---
 
-## Tech Stack
+## What the Installer Does
 
-| Layer | Technology |
-|-------|-----------|
-| **Frontend** | Next.js 16 (App Router), TypeScript, Vanilla CSS (or Streamlit UI via `app.py`) |
-| **Backend** | FastAPI, Uvicorn, Python 3.11+ |
-| **Database** | SQLite via SQLAlchemy 2.0 |
-| **LLM Provider** | OpenAI-compatible API (**Ollama**, Groq, OpenRouter, NVIDIA NIM, Custom Endpoint, or Mock) |
-| **LLM Models** | **Qwen 2.5** (`qwen2.5:7b`, `qwen2.5-coder`), **LLaMA 3.3**, GPT-4o, etc. |
-| **Local LLM Client** | `ollama` Python SDK & local REST server (`http://localhost:11434/v1`) |
-| **Embeddings** | `sentence-transformers/all-MiniLM-L6-v2` (HuggingFace) |
-| **Document Parsing**| PyMuPDF (`fitz`), `pdfplumber`, `pypdf`, `python-docx`, `openpyxl`, `pandas` |
-| **PDF Export** | ReportLab |
-| **DOCX Export** | python-docx |
-| **Validation** | Pydantic v2, pydantic-settings |
+Running `install.ps1` (Windows) or `install.sh` (macOS/Linux) automatically performs the complete environment setup:
+
+1. **Prerequisite Verification**: Checks for Git, Python (>= 3.11), Node.js (>= 18), and npm.
+2. **Configuration Setup**: Creates `.env` from `.env.example` if not already present, safely preserving any existing user settings.
+3. **Backend Environment**: Creates the isolated Python virtual environment (`.venv`) and upgrades pip.
+4. **Backend Dependencies**: Installs all required Python packages from `requirements.txt` (FastAPI, PyMuPDF, ReportLab, python-docx, SQLAlchemy, Pydantic, etc.).
+5. **Database Initialization**: Sets up the SQLite database schema at `data/database/qp_agent.db` and generates starter sample files.
+6. **Frontend Dependencies**: Installs Next.js 16 dependencies in `frontend/` using `npm`.
+7. **AI Model Discovery**: Detects local Ollama installation, starts the service if needed, and downloads the default `qwen3:8b` model if not already available locally.
+8. **Health Validation**: Performs a complete check to verify all components are ready for execution.
 
 ---
 
-## Prerequisites
+## Starting the Application
 
-- **Python 3.11+** — [python.org](https://python.org)
-- **Node.js 18+** — [nodejs.org](https://nodejs.org)
-- **Ollama** *(Optional — for 100% local, offline execution with Qwen models)* — [ollama.com](https://ollama.com)
-- **Groq API key** *(Optional free cloud inference)* — [console.groq.com](https://console.groq.com)
-- Or run in **Mock mode** (no API key or local model required)
+Start all services with a single command:
+
+- **Windows**: `.\start.ps1`
+- **macOS / Linux**: `./start.sh`
+
+The startup script ensures Ollama is active, launches the FastAPI backend and Next.js frontend concurrently, and displays your service endpoints:
+
+| Service | URL | Purpose |
+| :--- | :--- | :--- |
+| **Web Application** | [http://localhost:3000](http://localhost:3000) | Primary faculty UI |
+| **Backend API** | [http://localhost:8000](http://localhost:8000) | FastAPI REST endpoints |
+| **API Documentation** | [http://localhost:8000/api/docs](http://localhost:8000/api/docs) | Interactive Swagger docs |
+| **Ollama Service** | [http://localhost:11434](http://localhost:11434) | Local LLM inference server |
+
+### Script Management Flags
+
+- **Restart services**: `.\start.ps1 -Restart` (Windows) or `./start.sh --restart` (macOS/Linux)
+- **Stop services**: `.\start.ps1 -Stop` (Windows) or `./start.sh --stop` (macOS/Linux)
+- **Clean Shutdown**: Press `Ctrl+C` in the terminal to cleanly terminate both frontend and backend processes without leaving orphaned processes on ports 3000 or 8000.
 
 ---
 
-## Setup
+## First-Time Usage
 
-### 1 — Clone and enter the project
+Follow these steps when using Prashnopatra for the first time:
 
-```powershell
-cd D:\sdgsgddgsgsdg\Prashnopatra
+1. **Launch the application** via `.\start.ps1` or `./start.sh` and open `http://localhost:3000` in your browser.
+2. **Select Active Subject**: Use the dropdown in the sidebar to choose your subject or click **Course Setup** to register a new course.
+3. **Configure Course Setup**: Enter Course Code, Title, Semester, and Department. Review the extracted or default examination marking schemes.
+4. **Upload Question Bank**: Navigate to **Question Bank** and import questions from Excel (`.xlsx`), CSV, Word (`.docx`), or PDF.
+5. **Upload Lesson Plan**: Go to **Lesson Plan** and upload your syllabus/lesson plan document. The agent extracts units, topics, and model examination patterns.
+6. **Generate Question Paper**: Click **Generate Paper**, choose the exam type (ISA-I, ISA-II, or ESA), adjust Bloom taxonomy weights, and initiate generation.
+7. **Faculty Review & Approval**: Review each question card, regenerate individual questions if needed, approve questions, and inspect the compliance report.
+8. **View & Download**: Inspect the formatted A4 preview via **View Paper**, then export the final approved paper as DOCX or PDF.
+
+---
+
+## Application Workflow
+
+```text
+Select Subject ──> Course Setup ──> Question Bank ──> Lesson Plan
+                                                          │
+Download (DOCX/PDF) <── View Paper <── Validation <── Faculty Review <── Generate Paper
 ```
 
-### 2 — Create and activate the Python virtual environment
+- **Select Subject**: All operations are scoped strictly to the currently selected subject to prevent accidental cross-course contamination.
+- **Course Setup**: Stores syllabus metadata and exam configurations (total marks, full questions, sub-question splits).
+- **Question Bank**: Central repository of approved departmental questions tagged with Bloom levels, Course Outcomes (COs), and difficulty.
+- **Lesson Plan**: Syllabus breakdown extracted by the Intake Agent to guide generation and blueprint alignment.
+- **Generate Paper**: Assembles an exam blueprint, retrieves approved bank questions, and uses the LLM to synthesize fresh questions for remaining slots.
+- **Faculty Review**: Faculty oversight interface where questions can be modified, regenerated, or approved.
+- **Validation**: 10-rule verification engine checking arithmetic, Bloom percentages, CO coverage, and duplicate prevention.
+- **View Paper**: Realistic A4 printable layout preview matching institutional styling.
+- **Download**: Exports publication-ready Word (`.docx`) and vector PDF (`.pdf`) files once all questions are approved.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+---
+
+## Subject Management
+
+Subject scoping ensures multiple courses can be administered independently without data overlap:
+
+- **Add Subject**: Navigate to **Course Setup** -> **Add Subject**. Specify the Course Code (e.g., `21CS61`), Course Title, Semester, and Department. All mandatory fields must be selected before saving.
+- **Switch Subject**: Open the **Active Subject** selector in the sidebar. Selecting a subject dynamically loads its associated question bank, lesson plans, marking schemes, and generated papers.
+- **Delete Subject**: Located within subject settings. Allows removal of a subject and its associated local configurations after user confirmation.
+- **Explicit Selection Rule**: The system **does not assume or auto-select a default subject**. Faculty must explicitly choose an active subject before performing subject-specific actions.
+
+---
+
+## Question Paper Generation
+
+Prashnopatra supports university examination patterns:
+
+- **ISA-I (In-Semester Assessment 1)**: Covers initial units (typically Units 1 & 2), 30–50 marks.
+- **ISA-II (In-Semester Assessment 2)**: Covers intermediate units (typically Units 3 & 4), 30–50 marks.
+- **ESA (End-Semester Assessment)**: Comprehensive coverage across all units, typically 100 marks with internal choice.
+
+### Saved Marking Scheme Consumption
+During paper generation, the system retrieves the saved marking scheme directly from the database (e.g., Question 1a = 10 marks, 1b = 5 marks). **The Lesson Plan is not re-parsed during generation**, guaranteeing deterministic arithmetic, rapid generation, and exact adherence to faculty-configured question splits.
+
+---
+
+## Faculty Review
+
+Faculty maintain complete control over question paper contents:
+
+```text
+Faculty Review
+├── Review generated questions
+├── Approve individual questions
+├── Regenerate an individual question
+├── Approve all questions
+├── View formatted paper
+├── Download DOCX
+└── Download PDF
 ```
 
-> If you get an execution policy error, run first:
-> ```powershell
-> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-> ```
+- **Approve Question**: Validates an individual question slot.
+- **Regenerate Question**: Prompts the AI to synthesize a replacement question for that specific slot while strictly preserving the slot's original constraints (Chapter, Bloom level, CO mapping, and sub-question marks).
+- **Download Lock**: Download buttons for DOCX and PDF are disabled until **100% of questions are approved** by the faculty member.
 
-### 3 — Install Python dependencies
+---
 
-Includes core API libraries, `ollama`, `PyMuPDF`, `pdfplumber`, `reportlab`, `sentence-transformers`, etc.:
+## Validation
 
-```powershell
-pip install -r requirements.txt
-```
+The automated Validation Agent executes 10 compliance rules on every generated draft:
 
-### 4 — Install frontend dependencies
+1. **Total Marks Compliance**: Total paper marks exactly equal the configured exam pattern.
+2. **Question Structure Compliance**: Number of main questions and sub-question splits match the marking scheme.
+3. **Bloom Taxonomy Distribution**: Ensures proportion of lower-order (L1–L2) vs higher-order (L3–L6) questions falls within institutional bounds.
+4. **Course Outcome (CO) Coverage**: Validates that all target COs for the examination scope are addressed.
+5. **Unit/Module Balance**: Ensures questions are distributed evenly across assigned chapters.
+6. **Repetition & Duplicate Check**: Multi-tier similarity check (exact match, token overlap, and embeddings) ensuring similarity is below threshold (< 0.70).
+7. **Difficulty Balance**: Checks distribution across Easy, Medium, and Challenging questions.
+8. **Valuation Scheme Availability**: Verifies that every question includes a step-by-step marking guide.
+9. **Formatting Consistency**: Ensures question titles, formulas, and sub-parts follow standardized numbering.
+10. **Faculty Approval Verification**: Ensures all slots carry explicit faculty sign-off.
 
-```powershell
-cd frontend
-npm install
-cd ..
-```
+---
 
-### 5 — Configure environment variables
+## Export / Download
 
-```powershell
-copy .env.example .env
-notepad .env
-```
+- **View Paper**: An interactive, print-accurate preview modal rendering the question paper with official headers, course details, time limits, and instructions.
+- **Download DOCX**: Editable Word document styled with university guidelines, standard tables, and clean indentation.
+- **Download PDF**: Publication-grade vector PDF generated via ReportLab with accurate pagination and typography.
+- **Valuation Guide**: Accompanying solution blueprint and step-wise mark distribution for examiners.
 
 ---
 
 ## Configuration
 
-All settings live in `.env`. Key LLM provider options:
+Prashnopatra is configured via `.env` in the project root. The installer creates this file automatically:
 
-### Local LLM via Ollama & Qwen (100% Offline & Free)
+```ini
+# LLM Provider Configuration
+LLM_PROVIDER="ollama"          # Options: "ollama", "groq", "openai", "mock"
+LLM_MODEL="qwen3:8b"           # Model identifier
+OLLAMA_MODEL="qwen3:8b"        # Model for local Ollama instance
+OLLAMA_BASE_URL="http://localhost:11434/v1"
 
-To run fully local question paper generation using **Qwen 2.5** via **Ollama**:
+# Database Configuration
+DATABASE_URL="sqlite:///./data/database/qp_agent.db"
 
-1. Install Ollama from [ollama.com](https://ollama.com) and pull a Qwen model:
-   ```powershell
-   ollama pull qwen2.5:7b
-   ```
-2. Configure `.env`:
-   ```dotenv
-   LLM_PROVIDER="ollama"
-   OLLAMA_MODEL="qwen2.5:7b"
-   OLLAMA_BASE_URL="http://localhost:11434/v1"
-   OLLAMA_API_KEY="ollama"
-   ```
+# Optional Cloud Acceleration
+GROQ_API_KEY=""                # Free key from https://console.groq.com
 
-*(You can also use `qwen2.5:14b`, `qwen2.5-coder:7b`, or `qwen2.5:72b` depending on your hardware).*
-
-### Groq Cloud Provider
-
-```dotenv
-LLM_PROVIDER="groq"
-LLM_MODEL="llama-3.3-70b-versatile"
-GROQ_API_KEY="your-groq-key"
+# Offline Testing
+USE_MOCK_LLM=false             # Set to true to test UI/workflows without LLM/GPU
 ```
-
-### OpenRouter (with Qwen or GPT-4o)
-
-```dotenv
-LLM_PROVIDER="openrouter"
-OPENROUTER_API_KEY="your-key"
-OPENROUTER_MODEL="qwen/qwen-2.5-72b-instruct"
-```
-
-### NVIDIA NIM (alternative)
-
-```dotenv
-LLM_PROVIDER="nvidia_nim"
-NVIDIA_NIM_API_KEY="your-key"
-NVIDIA_NIM_MODEL="meta/llama-3.1-70b-instruct"
-```
-
-### Mock mode (no API key or local model required)
-
-```dotenv
-USE_MOCK_LLM=true
-```
-
-All generation, validation, and export features work in mock mode using pre-defined schema-compliant responses. Ideal for testing and demos.
-
-### Duplicate detection thresholds
-
-```dotenv
-SEMANTIC_DUPLICATE_THRESHOLD=0.88   # cosine similarity → block
-SEMANTIC_WARNING_THRESHOLD=0.80     # cosine similarity → warn
-```
-
-### Paper rules
-
-```dotenv
-DEFAULT_BLOOM_L2_PERCENT=50
-DEFAULT_BLOOM_L3_PERCENT=50
-DEFAULT_RATIO_TOLERANCE_PERCENT=5
-MAX_PAPER_SETS=5
-```
-
----
-
-## Running the App
-
-Open **two terminals**:
-
-**Terminal 1 — Backend**
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-uvicorn api.main:app --reload --port 8000
-```
-
-**Terminal 2 — Frontend**
-
-```powershell
-cd frontend
-npm run dev
-```
-
-| URL | Description |
-|-----|-------------|
-| http://localhost:3000 | Next.js frontend |
-| http://localhost:8000/api/docs | FastAPI Swagger UI |
-| http://localhost:8000/api/redoc | FastAPI ReDoc |
-| http://localhost:8000/api/health | Health check endpoint |
-
----
-
-## Usage Workflow
-
-```
-1. Course Setup      → Enter course name, code, department, semester
-2. Lesson Plan       → Upload PDF/DOCX → auto-extract chapter structure → review & confirm
-3. Question Bank     → Upload XLSX/CSV → validate & import → check completeness matrix
-4. Generate          → Choose exam type, sets, Bloom split → confirm blueprint → Generate
-5. Faculty Review    → Review questions → Approve / Reject / Edit each → Approve Set
-6. Export            → Download DOCX or PDF (approval required for final export)
-```
-
-### Page Guide
-
-| Page | Route | Purpose |
-|------|-------|---------|
-| Dashboard | `/` | Stats overview — question bank health, paper set counts, recent activity |
-| Course Setup | `/course` | Configure course metadata and chapter structure |
-| Lesson Plan | `/lesson-plan` | Upload lesson plan, view AI-extracted chapter structure |
-| Question Bank | `/questions` | Import questions, browse bank, view chapter completeness |
-| Generate | `/generate` | Configure and trigger paper generation |
-| Faculty Review | `/review` | Review, edit, approve questions; download DOCX/PDF |
-| Validation | `/validation` | Detailed validation report per paper set |
-| History | `/history` | Question usage history across exam cycles |
-| Settings | `/settings` | LLM health check and configuration info |
-
----
-
-## Examination Patterns
-
-### Minor / Internal Examination
-
-| Parameter | Value |
-|-----------|-------|
-| Duration | 75 minutes |
-| Total marks attempted | 40 |
-| Questions printed | 6 sub-questions (Q1–Q3, each with (a) and (b)) |
-| Choice rule | Answer any **TWO** complete questions |
-| Bank source | 4 questions (66.7%) |
-| AI generated | 2 questions (33.3%) |
-
-```
-Q1
-  (a) ................................................................ [10 Marks]
-  (b) ................................................................ [10 Marks]
-Q2
-  (a) ................................................................ [10 Marks]
-  (b) ................................................................ [10 Marks]
-Q3
-  (a) ................................................................ [10 Marks]
-  (b) ................................................................ [10 Marks]
-
-Answer any TWO full questions.
-```
-
-### End-Semester Examination
-
-| Parameter | Value |
-|-----------|-------|
-| Duration | 180 minutes |
-| Total marks attempted | 100 |
-| Questions printed | 16 sub-questions |
-| Bank source | 11 questions (68.75%) |
-| AI generated | 5 questions (31.25%) |
-
-Unit structure:
-
-| Unit | Questions | Marks | Choice |
-|------|-----------|-------|--------|
-| Unit 1 (Q1–Q3) | 6 sub-questions | 40 | Answer any 2 |
-| Unit 2 (Q4–Q6) | 6 sub-questions | 40 | Answer any 2 |
-| Unit 3 (Q7–Q8) | 4 sub-questions | 20 | Answer any 1 |
-
-> **Note on the 70:30 rule:** "Question" means one 10-mark sub-question (e.g. Q1(a)). The ratio applies to all *printed* sub-questions, not to questions students attempt. The achieved ratios (66.7% / 68.75%) are the nearest feasible integers — this is clearly stated in the validation report.
-
----
-
-## Question Bank Schema
-
-Upload as `.xlsx`, `.csv`, or `.json`. Required columns:
-
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `question_id` | string | ✅ | Unique, e.g. `GENAI-U1-C1-L2-Q01` |
-| `unit_number` | int | ✅ | `1`, `2`, or `3` |
-| `chapter_number` | int | ✅ | `1` to `7` |
-| `chapter_name` | string | ✅ | Must match lesson plan |
-| `question_text` | string | ✅ | Cannot be empty |
-| `bloom_level` | string | ✅ | `L2` or `L3` only |
-| `marks` | int | ✅ | Must be `10` |
-| `model_answer` | string | ❌ | Warning generated if missing |
-| `difficulty` | string | ❌ | `easy` / `medium` / `hard` |
-
-**Target bank size:** 140 questions — 7 chapters × (10 L2 + 10 L3)
-
-The completeness matrix on the Dashboard shows exactly which chapters are ready.
-
----
-
-## Project Structure
-
-```
-Prashnopatra/
-│
-├── api/                          # FastAPI application
-│   ├── main.py                   # App entry point, CORS, router registration
-│   ├── routers/
-│   │   ├── course.py             # Course info & lesson plan endpoints
-│   │   ├── questions.py          # Question bank CRUD & import
-│   │   ├── papers.py             # Generation, review, approval & export
-│   │   ├── audit.py              # Stats & activity log
-│   │   └── settings.py           # LLM health check
-│   └── schemas/                  # Pydantic request/response schemas
-│
-├── agents/                       # Agentic workflow nodes
-│   ├── coordinator.py            # Orchestrator — runs all agents in order
-│   ├── intake_agent.py           # Lesson plan parsing & chapter extraction
-│   ├── question_bank_agent.py    # Bank validation & normalisation
-│   ├── blueprint_agent.py        # Immutable generation blueprint builder
-│   ├── selection_agent.py        # Constraint-based bank question selector
-│   ├── generation_agent.py       # LLM question generation
-│   ├── similarity_agent.py       # Duplicate detection (exact/TF-IDF/embedding)
-│   ├── composition_agent.py      # Q-slot assignment (Q1a, Q1b, …)
-│   ├── valuation_agent.py        # LLM valuation scheme generation
-│   ├── validation_agent.py       # Rules-based paper validation
-│   └── export_agent.py           # DOCX export with approval gate
-│
-├── services/                     # Shared business logic
-│   ├── llm_provider.py           # OpenAI-compatible LLM client (multi-provider)
-│   ├── pdf_service.py            # ReportLab PDF generation
-│   ├── question_bank_service.py  # File parsing & bank import
-│   ├── blueprint_service.py      # Blueprint computation helpers
-│   ├── similarity_service.py     # TF-IDF & embedding similarity
-│   └── file_service.py           # File upload utilities
-│
-├── models/                       # Pydantic v2 domain models
-│   ├── enums.py                  # BloomLevel, ExamType, ApprovalStatus, …
-│   ├── question.py               # QuestionRecord
-│   ├── blueprint.py              # MinorBlueprint, EndSemBlueprint
-│   ├── paper.py                  # PaperQuestion, PaperSet, CompletePaper
-│   ├── valuation.py              # ValuationScheme, ValuationPoint
-│   └── validation.py             # ValidationReport, ValidationFinding
-│
-├── repositories/                 # SQLAlchemy data access layer
-│   ├── database.py               # ORM models + init_db()
-│   ├── question_repo.py          # Question CRUD
-│   ├── paper_repo.py             # Paper set & question persistence
-│   ├── audit_repo.py             # Audit log
-│   └── settings_repo.py          # Key-value settings store
-│
-├── config/
-│   └── settings.py               # Pydantic-settings configuration singleton
-│
-├── utils/
-│   ├── logging_config.py         # Structured logging setup
-│   ├── helpers.py                # Shared utility functions
-│   └── errors.py                 # Custom exception types
-│
-├── frontend/                     # Next.js 16 web UI
-│   └── src/
-│       ├── app/
-│       │   ├── page.tsx          # Dashboard
-│       │   ├── course/           # Course setup
-│       │   ├── lesson-plan/      # Lesson plan upload & editor
-│       │   ├── questions/        # Question bank manager
-│       │   ├── generate/         # Paper generation wizard
-│       │   ├── review/           # Faculty review & export
-│       │   ├── validation/       # Validation report viewer
-│       │   ├── history/          # Usage history
-│       │   └── settings/         # Settings & LLM health
-│       ├── components/
-│       │   ├── Sidebar.tsx       # Navigation sidebar
-│       │   └── ui.tsx            # Shared UI components
-│       └── lib/
-│           └── api.ts            # Typed API client
-│
-├── tests/                        # pytest test suite
-│   ├── conftest.py
-│   ├── test_blueprint.py
-│   ├── test_question_bank.py
-│   ├── test_generation.py
-│   └── test_similarity.py
-│
-├── data/                         # Runtime data (gitignored outputs)
-│   ├── question_bank/            # Drop approved bank files here
-│   ├── lesson_plan/              # Drop lesson plan files here
-│   ├── university_templates/     # Drop .docx template here
-│   ├── generated_outputs/
-│   │   ├── drafts/               # Draft DOCX files
-│   │   ├── approved/             # Final approved exports
-│   │   ├── schemes/              # Valuation scheme DOCX files
-│   │   └── validation_reports/   # JSON validation reports
-│   └── database/
-│       └── qp_agent.db           # SQLite database
-│
-├── app.py                        # Legacy Streamlit UI (kept, not primary)
-├── .env                          # Your local config (never commit)
-├── .env.example                  # Config template (safe to commit)
-├── requirements.txt              # Python dependencies
-└── pyproject.toml                # Project metadata
-```
-
----
-
-## API Reference
-
-Base URL: `http://localhost:8000/api`
-
-### Course
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/course/info` | Get course metadata |
-| `POST` | `/course/info` | Save course metadata |
-| `GET` | `/course/structure` | Get chapter structure |
-| `POST` | `/course/structure` | Save chapter structure |
-| `POST` | `/course/lesson-plan/extract` | Upload & extract lesson plan |
-
-### Questions
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/questions` | List questions (filter by chapter, bloom, limit) |
-| `GET` | `/questions/completeness` | Chapter completeness matrix |
-| `POST` | `/questions/import` | Upload & import question bank file |
-| `PATCH` | `/questions/{id}` | Edit a question |
-| `DELETE` | `/questions/{id}` | Delete a question |
-
-### Papers
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/papers` | List all paper sets |
-| `POST` | `/papers/generate` | Trigger paper generation |
-| `GET` | `/papers/{set_id}` | Get paper set with all questions |
-| `PATCH` | `/papers/{set_id}/questions/{slot_id}` | Update question status/text |
-| `POST` | `/papers/{set_id}/approve` | Approve a paper set |
-| `GET` | `/papers/{set_id}/validation` | Get validation report |
-| `GET` | `/papers/{set_id}/export/pdf` | Download paper as PDF |
-| `GET` | `/papers/{set_id}/export/docx` | Download paper as DOCX |
-
-### Audit
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/audit/stats` | Dashboard stats |
-| `GET` | `/audit/logs` | Activity log |
-
-Full interactive docs: **http://localhost:8000/api/docs**
-
----
-
-## Testing
-
-Run the full test suite (mock LLM — no API key required):
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-$env:USE_MOCK_LLM = "true"
-pytest tests/ -v
-```
-
-Tests cover:
-- Minor and End-Sem blueprint generation
-- Bank and AI question count allocation
-- Bloom level distribution (50:50 and custom splits)
-- Multi-set uniqueness (no cross-set bank reuse)
-- Approval gating (export blocked before APPROVED status)
-- Question bank validation (duplicate IDs, empty text, invalid Bloom)
-- Similarity service (exact match detection)
-- Database initialisation and settings loading
 
 ---
 
 ## Troubleshooting
 
-### `Rate limit reached` on Groq
-The free tier has token-per-day limits. Either wait for the reset, upgrade to the Dev Tier, or switch to `USE_MOCK_LLM=true` for testing.
-
-### `No API key found`
-Set `LLM_API_KEY` or `GROQ_API_KEY` in `.env`, or add `USE_MOCK_LLM=true`.
-
-### `Insufficient questions for slots`
-The question bank doesn't have enough L2 or L3 questions in the selected chapters. Check the completeness matrix on the Dashboard and add more questions before generating.
-
-### Review page shows old papers after regeneration
-Click the **↺ Refresh** button in the Faculty Review sidebar, or switch tabs and return — the list auto-refreshes on tab focus.
-
-### Export returns 404
-The paper set ID doesn't exist in the database. Try generating papers again.
-
-### Sentence-transformer slow on first load
-The embedding model (`all-MiniLM-L6-v2`, ~90 MB) is downloaded from HuggingFace on first use and cached locally. Subsequent starts are fast. Set `HF_TOKEN` in your environment to avoid unauthenticated rate limits.
-
-### Frontend can't reach the backend
-Make sure the backend is running on port 8000. The frontend proxies to `http://localhost:8000/api` by default. Check `NEXT_PUBLIC_API_URL` in the frontend `.env.local` if you change the port.
+| Problem | Cause | Solution |
+| :--- | :--- | :--- |
+| **Port 8000 or 3000 already in use** | A previous instance is still running in the background. | Run `.\start.ps1 -Restart` (Windows) or `./start.sh --restart` (macOS/Linux) to cleanly restart. |
+| **Python not recognized** | Python is not installed or not added to your system PATH. | Install Python 3.11+ from [python.org](https://www.python.org/downloads/) and check **"Add Python to PATH"**. Then rerun `install.ps1`. |
+| **Node / npm not found** | Node.js is missing or below version 18. | Download and install Node.js 20+ LTS from [nodejs.org](https://nodejs.org/) and rerun the installer. |
+| **Ollama service unreachable** | Ollama is not running on port 11434. | Start Ollama manually using `ollama serve` or rerun `.\start.ps1` which attempts to launch it automatically. |
+| **Model `qwen3:8b` not found** | Model was not downloaded during installation. | Run `ollama pull qwen3:8b` in your terminal or check internet connection. |
+| **Download button is disabled** | One or more questions in Faculty Review are unapproved. | Review and approve all question slots in the Faculty Review page to unlock download. |
 
 ---
 
-## Confidentiality Notice
+## Project Structure
 
-⚠️ **Question papers are strictly confidential academic documents.**
-
-- The backend binds to `127.0.0.1` only — not accessible from other machines
-- Generated paper files in `data/generated_outputs/` are excluded from Git by `.gitignore`
-- API keys are never logged (set `LOG_PROMPT_CONTENT=false`)
-- Never commit `.env` to version control
-- Never push generated paper files to any remote repository
-- Reset the database (`data/database/qp_agent.db`) before production deployment
+```text
+Prashnopatra/
+├── install.ps1               # Automated installer for Windows
+├── install.sh                # Automated installer for macOS / Linux
+├── start.ps1                 # Single-command startup for Windows
+├── start.sh                  # Single-command startup for macOS / Linux
+├── README.md                 # Complete system documentation
+├── requirements.txt          # Python backend dependencies
+├── pyproject.toml            # Project configuration & metadata
+├── .env.example              # Environment variables template
+├── api/                      # FastAPI backend application
+│   ├── main.py               # API entry point & routes
+│   └── routers/              # Modular API endpoints (subjects, QP, review)
+├── frontend/                 # Next.js 16 frontend application
+│   ├── src/app/              # Application pages (course, bank, review, etc.)
+│   ├── src/components/       # Reusable UI components
+│   └── package.json          # Node.js dependencies
+├── agents/                   # Agentic generation & validation workflows
+├── models/                   # Pydantic data models & schemas
+├── repositories/             # SQLite database layer & SQLAlchemy models
+├── services/                 # Core business services (parsing, generator, export)
+├── data/                     # Local storage (database, sample files, outputs)
+└── logs/                     # Service runtime logs
+```
 
 ---
 
-## Known Limitations
+## Important Notes
 
-1. **Single course** — Only the Generative AI course (3 units, 7 chapters) is configured. Multi-course support requires a schema extension.
-2. **Groq free tier** — 100k tokens/day limit. Use mock mode or a paid tier for heavy use.
-3. **Embedding model download** — First run downloads ~90 MB from HuggingFace.
-4. **Lesson plan extraction** — AI extraction is heuristic; always review and confirm the extracted chapter structure before generating.
-5. **No authentication** — This is a local faculty tool. Add authentication before any multi-user or network deployment.
-
----
-
-*Prashnopatra v0.1.0 — Generative AI Course — Question Paper Setting Agent*
+- **Academic Confidentiality**: Question papers and solution keys are restricted academic documents. Generated papers and drafts in `data/generated_outputs/` and database files in `data/database/` are strictly excluded from version control via `.gitignore`.
+- **Local & Offline Privacy**: When using Ollama with `qwen3:8b`, all document parsing, question generation, and validation happen entirely on your local machine. No exam content or student data is transmitted over the internet.
+- **Faculty Accountability**: Prashnopatra is an assistive productivity agent. The final authority and academic accountability always reside with the faculty reviewer.

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, ReactNode } from 'react'
+import { useEffect, useRef, ReactNode, useState, useCallback, createContext, useContext } from 'react'
+import { api, type SubjectDetail } from '@/lib/api'
 
 export function StatCard({ value, label, icon }: { value: string | number; label: string; icon?: string }) {
   return (
@@ -17,8 +18,8 @@ export function Badge({ children, variant = 'gray' }: { children: ReactNode; var
   return <span className={`badge badge-${variant}`}>{children}</span>
 }
 
-export function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`card card-pad ${className}`}>{children}</div>
+export function Card({ children, className = '', style }: { children: ReactNode; className?: string; style?: React.CSSProperties }) {
+  return <div className={`card card-pad ${className}`} style={style}>{children}</div>
 }
 
 export function SectionLabel({ children, style }: { children: ReactNode; style?: React.CSSProperties }) {
@@ -107,7 +108,6 @@ export function FileDropzone({
   )
 }
 
-import { createContext, useContext, useState, useCallback } from 'react'
 
 interface Toast { id: number; message: string; type: 'success' | 'error' | 'info' }
 const ToastCtx = createContext<{ toast: (msg: string, type?: Toast['type']) => void }>({
@@ -156,6 +156,104 @@ export function EmptyState({ icon, title, sub, action }: {
       <div className="font-semibold" style={{ marginBottom: '0.3rem' }}>{title}</div>
       {sub && <div className="text-sm text-muted" style={{ marginBottom: '1rem' }}>{sub}</div>}
       {action}
+    </div>
+  )
+}
+
+/**
+ * ActiveSubjectBanner
+ * Displays the currently active subject on every page.
+ * Listens to "activeSubjectChanged" and refreshes automatically.
+ * showLink prop (default true) shows "Edit in Course Setup" link.
+ */
+export function ActiveSubjectBanner({
+  subject: externalSubject,
+  showLink = true,
+}: {
+  subject?: SubjectDetail | null
+  showLink?: boolean
+}) {
+  const [subject, setSubject] = useState<SubjectDetail | null>(externalSubject ?? null)
+  const [loading, setLoading] = useState(!externalSubject)
+
+  const fetchSubject = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { active_subject_id } = await api.getActiveSubjectId()
+      if (active_subject_id) {
+        const detail = await api.getSubject(active_subject_id)
+        setSubject(detail)
+      } else {
+        setSubject(null)
+      }
+    } catch {
+      // silently ignore
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    // If a subject was passed as prop, don't auto-fetch
+    if (externalSubject !== undefined) {
+      setSubject(externalSubject)
+      return
+    }
+    fetchSubject()
+    const handler = () => fetchSubject()
+    window.addEventListener('activeSubjectChanged', handler)
+    return () => window.removeEventListener('activeSubjectChanged', handler)
+  }, [fetchSubject, externalSubject])
+
+  if (loading) {
+    return (
+      <div className="active-subject-banner" style={{ opacity: 0.6 }}>
+        <div className="active-subject-banner-icon">📚</div>
+        <div className="active-subject-banner-body">
+          <div className="active-subject-banner-label">Active Subject</div>
+          <div className="active-subject-banner-name" style={{ color: 'var(--text-3)' }}>Loading…</div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!subject) {
+    return (
+      <div className="alert alert-info mb-4" style={{ borderRadius: '12px', padding: '0.85rem 1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <span>👉</span> <strong>Please select a subject to continue.</strong>
+      </div>
+    )
+  }
+
+  return (
+    <div className="active-subject-banner">
+      <div className="active-subject-banner-icon">📚</div>
+      <div className="active-subject-banner-body">
+        <div className="active-subject-banner-label">Active Subject</div>
+        <div className="active-subject-banner-name">{subject.course_name}</div>
+        <div className="active-subject-banner-meta">
+          {subject.course_code && (
+            <span className="badge badge-blue">{subject.course_code}</span>
+          )}
+          {subject.semester && (
+            <span className="badge badge-gray">Semester {subject.semester}</span>
+          )}
+          {subject.department && (
+            <span className="badge badge-gray">{subject.department}</span>
+          )}
+        </div>
+      </div>
+      {showLink && (
+        <div className="active-subject-banner-action">
+          <a
+            href="/course"
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: '0.78rem', padding: '0.3rem 0.75rem' }}
+          >
+            ✏ Course Setup
+          </a>
+        </div>
+      )}
     </div>
   )
 }

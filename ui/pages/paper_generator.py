@@ -13,6 +13,12 @@ settings = get_settings()
 
 
 def render():
+    from repositories.subject_repo import SubjectRepository
+    active_subject = SubjectRepository().get_active_subject()
+    if not active_subject:
+        st.info("👉 Please select a subject to continue.")
+        return
+
     st.markdown("## ⚡ Paper Generator")
     st.markdown(
         "<div class='confidential-banner'>⚠️ Generated papers are confidential academic documents</div>",
@@ -32,10 +38,16 @@ def render():
         st.markdown("### 1️⃣ Examination Type")
         exam_type_str = st.selectbox(
             "Select examination type",
-            ["Minor / Internal Examination", "End-Semester Examination"],
+            ["Minor 1 Examination (ISA-I)", "Minor 2 Examination (ISA-II)", "End-Semester Examination (ESA)"],
         )
-        is_minor = exam_type_str.startswith("Minor")
+        is_minor = "Minor" in exam_type_str
         exam_type = ExamType.MINOR if is_minor else ExamType.END_SEM
+        exam_subtype = "ISA-I" if "ISA-I" in exam_type_str else "ISA-II" if "ISA-II" in exam_type_str else "ESA"
+
+        # Look up saved scheme
+        saved_schemes = (active_subject.get("lp_metadata") or {}).get("marking_schemes") or {}
+        exam_key = "isa1" if exam_subtype == "ISA-I" else "isa2" if exam_subtype == "ISA-II" else "esa"
+        active_scheme = saved_schemes.get(exam_key) or saved_schemes.get(exam_subtype)
 
         st.markdown("### 2️⃣ Number of Sets")
         num_sets = st.slider(
@@ -45,12 +57,25 @@ def render():
 
         st.markdown("### 3️⃣ Chapter Selection")
         if is_minor:
-            st.markdown("*Select which chapters may appear in the Minor paper.*")
+            st.markdown(f"*Select which chapters may appear in the {exam_subtype} paper.*")
+            # Auto-default to mapped chapters from minor_configuration if available
+            minor_cfg = active_subject.get("minor_configuration") or {}
+            mapped_units = minor_cfg.get("minor1" if exam_subtype == "ISA-I" else "minor2", [])
+            default_ch = []
+            if mapped_units:
+                for unit in active_subject.get("units", []):
+                    if unit.get("unit_number") in mapped_units:
+                        for ch in unit.get("chapters", []):
+                            if ch.get("chapter_number") in chapter_options:
+                                default_ch.append(ch.get("chapter_number"))
+            if not default_ch:
+                default_ch = list(chapter_options.keys())[:3]
+
             selected_chapters = st.multiselect(
                 "Select chapters",
                 options=list(chapter_options.keys()),
                 format_func=lambda x: chapter_options[x],
-                default=list(chapter_options.keys())[:3],
+                default=default_ch,
             )
         else:
             st.markdown("*End-Semester papers use all chapters from all units.*")
@@ -90,7 +115,7 @@ def render():
             )
 
         st.markdown("### 6️⃣ Blueprint Preview")
-        _show_blueprint_preview(is_minor, l2_pct, l3_pct, num_sets)
+        _show_blueprint_preview(is_minor, exam_subtype, active_scheme, l2_pct, l3_pct, num_sets)
 
         st.markdown("---")
         confirmed = st.checkbox(
@@ -114,6 +139,7 @@ def render():
 
         request = GenerationRequest(
             exam_type=exam_type,
+            subject_id=active_subject.get("subject_id", "default"),
             num_sets=num_sets,
             l2_percent=l2_pct,
             l3_percent=l3_pct,
@@ -125,6 +151,8 @@ def render():
             lesson_plan_text=lesson_plan_text,
             unit_chapter_map=unit_chapter_map,
             exclude_used_question_ids=exclude_used,
+            marking_scheme=active_scheme,
+            exam_subtype=exam_subtype,
         )
 
         with st.spinner(f"🔄 Generating {num_sets} paper set(s)..."):
@@ -178,50 +206,36 @@ def render():
 
 
 
-def _show_blueprint_preview(is_minor: bool, l2_pct: int, l3_pct: int, num_sets: int):
+def _show_blueprint_preview(is_minor: bool, exam_subtype: str, scheme: dict, l2_pct: int, l3_pct: int, num_sets: int):
     """Display a summary of the paper blueprint before generation."""
-    if is_minor:
-        st.markdown(f"""
-        | Parameter | Value |
-        |-----------|-------|
-        | Exam Type | Minor / Internal Examination |
-        | Duration | 75 minutes |
-        | Total Attempted Marks | 40 |
-        | Total Printed Questions | 6 |
-        | Bank Questions | 4 (66.67% — nearest feasible to 70%) |
-        | AI Questions | 2 (33.33% — nearest feasible to 30%) |
-        | L2 Questions | {round(6 * l2_pct / 100)} |
-        | L3 Questions | {6 - round(6 * l2_pct / 100)} |
-        | Sets | {num_sets} |
-        | Choice Instruction | Answer any TWO full questions |
-        """)
-        st.caption(
-            "Note: 4 bank + 2 AI is the nearest feasible integer allocation to 70:30 "
-            "(actual: 66.67%/33.33%). This is clearly documented and not claimed as exact 70:30."
-        )
-    else:
-        l2_q = round(16 * l2_pct / 100)
-        l3_q = 16 - l2_q
-        st.markdown(f"""
-        | Parameter | Value |
-        |-----------|-------|
-        | Exam Type | End-Semester Examination |
-        | Duration | 180 minutes |
-        | Total Attempted Marks | 100 |
-        | Total Printed Questions | 16 |
-        | Bank Questions | 11 (68.75% — nearest feasible to 70%) |
-        | AI Questions | 5 (31.25% — nearest feasible to 30%) |
-        | L2 Questions | {l2_q} |
-        | L3 Questions | {l3_q} |
-        | Sets | {num_sets} |
-        | Unit 1 | 3 questions × 2 parts, answer any 2 (40 marks) |
-        | Unit 2 | 3 questions × 2 parts, answer any 2 (40 marks) |
-        | Unit 3 | 2 questions × 2 parts, answer any 1 (20 marks) |
-        """)
-        st.caption(
-            "Note: 11 bank + 5 AI is the nearest feasible integer allocation to 70:30 "
-            "(actual: 68.75%/31.25%). This is clearly documented."
-        )
+    scheme = scheme or {}
+    total_m = scheme.get("total_marks", 30 if is_minor else 100)
+    dur = scheme.get("duration", "75 minutes" if is_minor else "180 minutes")
+    sub_pattern = scheme.get("sub_question_pattern") or ([10, 5] if is_minor else [10, 10])
+    full_q = scheme.get("total_questions", 3 if is_minor else 8)
+    q_attempt = scheme.get("questions_to_attempt", 2 if is_minor else 5)
+    total_printed = full_q * (len(sub_pattern) if sub_pattern else 2)
+
+    l2_q = round(total_printed * l2_pct / 100)
+    l3_q = total_printed - l2_q
+
+    st.markdown(f"""
+    | Parameter | Value |
+    |-----------|-------|
+    | Exam Type | {exam_subtype} |
+    | Duration | {dur} |
+    | Total Attempted Marks | {total_m} marks |
+    | Full Questions (Printed) | {full_q} |
+    | Questions to Attempt | {q_attempt} |
+    | Sub-question Pattern | {sub_pattern} marks |
+    | Total Printed Sub-questions | {total_printed} |
+    | Bank Questions | {round(total_printed * 0.67)} (~67%) |
+    | AI Questions | {total_printed - round(total_printed * 0.67)} (~33%) |
+    | L2 Questions | {l2_q} |
+    | L3 Questions | {l3_q} |
+    | Sets | {num_sets} |
+    """)
+    st.caption("Consumes the saved marking scheme from Course Setup. No re-analysis of lesson plan needed.")
 
 
 def _build_unit_chapter_map(chapters: list[dict]) -> dict:

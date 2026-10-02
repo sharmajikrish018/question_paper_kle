@@ -250,7 +250,7 @@ st.markdown("""
   }
 
   /* ── Buttons ── */
-  .stButton > button {
+  .stButton > button, .stDownloadButton > button {
     border-radius: 980px !important;
     font-weight: 500 !important;
     font-size: 0.9rem !important;
@@ -259,22 +259,22 @@ st.markdown("""
     border: none !important;
     letter-spacing: -0.01em;
   }
-  .stButton > button[kind="primary"] {
+  .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
     background: #0071e3 !important;
     color: white !important;
     box-shadow: 0 2px 8px rgba(0,113,227,0.3) !important;
   }
-  .stButton > button[kind="primary"]:hover {
+  .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
     background: #0077ed !important;
     box-shadow: 0 4px 16px rgba(0,113,227,0.4) !important;
     transform: translateY(-1px) !important;
   }
-  .stButton > button[kind="secondary"] {
+  .stButton > button, .stDownloadButton > button {
     background: rgba(0,0,0,0.05) !important;
     color: #1d1d1f !important;
     border: 1px solid rgba(0,0,0,0.1) !important;
   }
-  .stButton > button[kind="secondary"]:hover {
+  .stButton > button:hover, .stDownloadButton > button:hover {
     background: rgba(0,0,0,0.08) !important;
     transform: translateY(-1px) !important;
   }
@@ -504,6 +504,53 @@ def render_sidebar():
             </div>
         </div>
         """, unsafe_allow_html=True)
+
+        # ── Active Subject Selector ──────────────────────────────────────────────
+        from repositories.subject_repo import SubjectRepository
+        subj_repo = SubjectRepository()
+        subjects = subj_repo.list_subjects()
+        active_id = subj_repo.get_active_subject_id()
+
+        st.markdown("""
+        <div style='padding: 0.5rem 0.5rem 0.2rem; font-size: 0.7rem; font-weight: 700; color: #86868b; letter-spacing: 0.08em; text-transform: uppercase;'>
+            ACTIVE SUBJECT
+        </div>
+        """, unsafe_allow_html=True)
+
+        options = ["Select Subject"] + [
+            f"{s['course_name']}{f' ({s[\"course_code\"]})' if s.get('course_code') else ''}"
+            for s in subjects
+        ]
+        slug_map = {
+            f"{s['course_name']}{f' ({s[\"course_code\"]})' if s.get('course_code') else ''}": s["subject_id"]
+            for s in subjects
+        }
+
+        selected_index = 0
+        if active_id:
+            for idx, s in enumerate(subjects, start=1):
+                if s["subject_id"] == active_id:
+                    selected_index = idx
+                    break
+
+        selected_option = st.selectbox(
+            "Active Subject Select",
+            options=options,
+            index=selected_index,
+            label_visibility="collapsed",
+            key="sidebar_active_subject_selectbox",
+        )
+
+        chosen_slug = slug_map.get(selected_option, "")
+        if chosen_slug != (active_id or ""):
+            subj_repo.set_active_subject_id(chosen_slug)
+            st.rerun()
+
+        if st.button("＋ Add Subject", key="nav_add_subject_btn", use_container_width=True, type="secondary"):
+            st.session_state.current_page = "course_setup"
+            st.rerun()
+
+        st.markdown("---")
 
         pages = {
             "🏠  Dashboard":          "dashboard",

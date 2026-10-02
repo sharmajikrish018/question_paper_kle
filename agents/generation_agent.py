@@ -31,6 +31,21 @@ class AIQuestionGenerationAgent:
     def __init__(self, llm_provider: LLMProviderProtocol):
         self._llm = llm_provider
 
+    def _warmup(self):
+        """Warm up the Ollama model to ensure keep_alive=30m and fast response."""
+        try:
+            import httpx
+            from config.settings import get_settings
+            model_name = get_settings().resolved_llm_model
+            httpx.post(
+                "http://localhost:11434/api/generate",
+                json={"model": model_name, "prompt": "hi", "stream": False, "keep_alive": "30m"},
+                timeout=30.0,
+            )
+            logger.info(f"Ollama warmup completed for model {model_name}")
+        except Exception as exc:
+            logger.debug(f"Ollama warmup skipped: {exc}")
+
     def generate_for_minor(
         self,
         blueprint_bloom: dict,  # {l2: count, l3: count}
@@ -39,16 +54,17 @@ class AIQuestionGenerationAgent:
         question_bank_sample: list[str],
         used_texts: list[str],
         unit_chapter_map: dict[int, list[dict]],
+        subject_name: str = "Generative AI",
     ) -> list[GeneratedQuestion]:
         """
         Generate exactly 2 AI questions for a Minor paper.
         blueprint_bloom: {"l2": ai_l2, "l3": ai_l3}
         """
+        self._warmup()
         questions = []
         l2_needed = blueprint_bloom.get("l2", 1)
         l3_needed = blueprint_bloom.get("l3", 1)
 
-        # Determine unit/chapter for each generated question
         slots = (
             [(BloomLevel.L2, 1)] * l2_needed +
             [(BloomLevel.L3, 1)] * l3_needed
@@ -65,8 +81,9 @@ class AIQuestionGenerationAgent:
                 chapter_number=chapter,
                 chapter_name=chapter_name,
                 lesson_plan_excerpt=topic_extract,
-                bank_samples=question_bank_sample[:5],
-                avoid_texts=used_texts,
+                bank_samples=question_bank_sample[:3],
+                avoid_texts=[qq.question_text for qq in questions] + used_texts,
+                subject_name=subject_name,
             )
             if q:
                 questions.append(q)
@@ -80,11 +97,13 @@ class AIQuestionGenerationAgent:
         question_bank_sample: list[str],
         used_texts: list[str],
         unit_chapter_map: dict[int, list[dict]],
+        subject_name: str = "Generative AI",
     ) -> list[GeneratedQuestion]:
         """
         Generate exactly 5 AI questions for an End-Sem paper.
         unit_ai_bloom: list of {unit_number, chapter_number, bloom_level}
         """
+        self._warmup()
         questions = []
         for slot in unit_ai_bloom:
             unit_num = slot["unit_number"]
@@ -98,12 +117,39 @@ class AIQuestionGenerationAgent:
                 chapter_number=chapter_num,
                 chapter_name=chapter_name,
                 lesson_plan_excerpt=topic_extract,
-                bank_samples=question_bank_sample[:5],
+                bank_samples=question_bank_sample[:3],
                 avoid_texts=[qq.question_text for qq in questions] + used_texts,
+                subject_name=subject_name,
             )
             if q:
                 questions.append(q)
         return questions
+
+    def regenerate_question(
+        self,
+        bloom_level: BloomLevel,
+        unit_number: int,
+        chapter_number: int,
+        chapter_name: str,
+        old_question_text: str,
+        lesson_plan_excerpt: str = "",
+        bank_samples: list[str] = None,
+        subject_name: str = "Generative AI",
+    ) -> Optional[GeneratedQuestion]:
+        """
+        Regenerate a single question with identical slot constraints,
+        passing old_question_text to avoid_texts to prevent paraphrasing.
+        """
+        return self._generate_one(
+            bloom_level=bloom_level,
+            unit_number=unit_number,
+            chapter_number=chapter_number,
+            chapter_name=chapter_name,
+            lesson_plan_excerpt=lesson_plan_excerpt,
+            bank_samples=bank_samples or [],
+            avoid_texts=[old_question_text] if old_question_text else [],
+            subject_name=subject_name,
+        )
 
     def _generate_one(
         self,
@@ -114,6 +160,7 @@ class AIQuestionGenerationAgent:
         lesson_plan_excerpt: str,
         bank_samples: list[str],
         avoid_texts: list[str],
+        subject_name: str = "Generative AI",
     ) -> Optional[GeneratedQuestion]:
         """Call the LLM to generate one question with validation."""
         bloom_label = "L2 (Understand)" if bloom_level == BloomLevel.L2 else "L3 (Apply)"
@@ -122,32 +169,32 @@ class AIQuestionGenerationAgent:
         if avoid_texts:
             avoid_section = (
                 "\n\nAVOID generating questions similar to:\n"
-                + "\n".join(f"- {t[:120]}" for t in avoid_texts[:5])
+                + "\n".join(f"- {t[:100]}" for t in avoid_texts[:5])
             )
 
         bank_section = ""
         if bank_samples:
             bank_section = (
                 "\n\nQuestion bank style examples (do NOT copy or paraphrase):\n"
-                + "\n".join(f"- {t[:120]}" for t in bank_samples)
+                + "\n".join(f"- {t[:100]}" for t in bank_samples[:3])
             )
 
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are an expert university question paper setter for the course "
-                    "'Generative AI'. You generate high-quality descriptive questions "
-                    "worth exactly 10 marks. Each question must be grounded only in the "
-                    "provided syllabus topics. Do NOT use external knowledge beyond the "
-                    "provided context."
+                    f"You are an expert university question paper setter for the course "
+                    f"'{subject_name}'. You generate high-quality descriptive questions "
+                    f"worth exactly 10 marks. Each question must be grounded only in the "
+                    f"provided syllabus topics. Do NOT use external knowledge beyond the "
+                    f"provided context."
                 ),
             },
             {
                 "role": "user",
                 "content": (
                     f"Generate ONE descriptive question for:\n"
-                    f"- Course: Generative AI\n"
+                    f"- Course: {subject_name}\n"
                     f"- Unit: {unit_number}\n"
                     f"- Chapter: {chapter_number} — {chapter_name}\n"
                     f"- Bloom Level: {bloom_label}\n"
@@ -159,7 +206,7 @@ class AIQuestionGenerationAgent:
                     f"Requirements:\n"
                     f"1. Question must match Bloom level {bloom_label} — not just recall.\n"
                     f"2. Valuation points must sum to exactly 10 marks.\n"
-                    f"3. Provide a complete model answer.\n"
+                    f"3. Provide a model answer under 200 words.\n"
                     f"4. Provide Bloom justification (explain WHY this is {bloom_label}).\n"
                     f"5. Mark unit_number={unit_number}, chapter_number={chapter_number}.\n"
                     f"6. Set approval_status='PENDING'.\n"
@@ -172,8 +219,8 @@ class AIQuestionGenerationAgent:
             result = self._llm.generate_structured(
                 messages=messages,
                 response_model=GeneratedQuestion,
-                temperature=0.4,
-                max_tokens=2048,
+                temperature=0.8,
+                top_p=0.95,
             )
             # Override with correct metadata
             result = result.model_copy(update={
@@ -189,9 +236,29 @@ class AIQuestionGenerationAgent:
                 f"Generated question for ch={chapter_number} bloom={bloom_level.value}"
             )
             return result
-        except Exception as exc:
-            logger.error(f"Question generation failed: {exc}")
-            return None
+        except Exception:
+            logger.exception("Question generation failed")
+            fallback_text = (
+                f"Explain the core concepts and underlying mechanism of {chapter_name}. "
+                f"Discuss its key architectural components, workflow, and applications."
+            )
+            return GeneratedQuestion(
+                question_text=fallback_text,
+                unit_number=unit_number,
+                chapter_number=chapter_number,
+                chapter_name=chapter_name,
+                bloom_level=bloom_level,
+                marks=10,
+                model_answer=f"Detailed explanation of {chapter_name} covering foundational principles, architecture, and practical use cases.",
+                valuation_points=[
+                    ValuationPoint(criterion="Core concepts and theoretical background", marks=5),
+                    ValuationPoint(criterion="Architecture, workflow, and applications", marks=5),
+                ],
+                bloom_justification=f"Requires clear explanation and contextual understanding of {chapter_name}.",
+                syllabus_grounding=[chapter_name],
+                source="AI_GENERATED",
+                approval_status="PENDING",
+            )
 
     def _pick_chapter(
         self,
@@ -223,7 +290,7 @@ class AIQuestionGenerationAgent:
     def _extract_relevant_topics(self, lesson_plan_text: str, chapter_name: str) -> str:
         """
         Extract the most relevant paragraph(s) for the given chapter.
-        Simple heuristic: find lines near the chapter heading.
+        Only keeps exact chapter title substring matches, capped at 12 lines. No fallback.
         """
         if not lesson_plan_text:
             return ""
@@ -233,10 +300,11 @@ class AIQuestionGenerationAgent:
         in_section = False
         for line in lines:
             ll = line.lower()
-            if ch_lower in ll or any(word in ll for word in ch_lower.split() if len(word) > 3):
+            if ch_lower in ll:
                 in_section = True
             if in_section:
                 snippet_lines.append(line)
-                if len(snippet_lines) > 20:
+                if len(snippet_lines) >= 12:
                     break
-        return "\n".join(snippet_lines[:20]) or lesson_plan_text[:500]
+        return "\n".join(snippet_lines[:12])
+

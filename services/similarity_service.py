@@ -55,7 +55,7 @@ class SimilarityService:
         text = text.lower().strip()
         text = re.sub(r"[^\w\s]", " ", text)
         text = re.sub(r"\s+", " ", text)
-        return text
+        return text.strip()
 
     def _load_embedding_model(self):
         """Lazily load the sentence-transformer model."""

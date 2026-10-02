@@ -64,7 +64,6 @@ def _render_llm_settings():
                         [{"role": "user", "content": "Say OK"}],
                         Ping,
                         temperature=0.1,
-                        max_tokens=50,
                     )
                     st.success(f"✅ Connected! Response: {result.message[:50]}")
                 except Exception as exc:

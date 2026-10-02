@@ -98,14 +98,14 @@ class QuestionBankService:
 
         return self._validate_dataframe(df, path.name)
 
-    def import_to_database(self, result: ImportResult) -> int:
+    def import_to_database(self, result: ImportResult, subject_id: str) -> int:
         """
-        Persist validated questions to database.
+        Persist validated questions to database for the given subject.
         Only imports questions without fatal errors.
         """
         if not result.questions:
             return 0
-        return self._repo.bulk_upsert(result.questions)
+        return self._repo.bulk_upsert(result.questions, subject_id=subject_id)
 
     def chapter_completeness_report(
         self, expected_chapters: int = 7
@@ -344,7 +344,6 @@ class QuestionBankService:
                         ],
                         response_model=_QuestionBankSchema,
                         temperature=0.1,
-                        max_tokens=4096,
                     )
                     all_questions.extend(response.questions)
                     logger.info(

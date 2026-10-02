@@ -1,25 +1,79 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { api, type Stats, type AuditLog, type Completeness } from '@/lib/api'
+import { api, type Stats, type AuditLog, type Completeness, type SubjectDetail } from '@/lib/api'
 import { StatCard, SectionLabel, Hero, Card, EmptyState, ProgressBar } from '@/components/ui'
+import { SubjectSwitcher } from '@/components/SubjectSwitcher'
 
 export default function DashboardPage() {
   const router = useRouter()
+  const [activeSubject, setActiveSubjectDetail] = useState<SubjectDetail | null>(null)
   const [stats, setStats] = useState<Stats | null>(null)
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [completeness, setCompleteness] = useState<Completeness[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    Promise.all([api.getStats(), api.getLogs(8), api.getCompleteness()])
-      .then(([s, l, c]) => { setStats(s); setLogs(l); setCompleteness(c) })
-      .finally(() => setLoading(false))
+  const loadDashboardData = useCallback(async () => {
+    setLoading(true)
+    try {
+      // 1. Get active subject ID
+      const { active_subject_id } = await api.getActiveSubjectId()
+      let subjDetail: SubjectDetail | null = null
+      if (active_subject_id) {
+        try {
+          subjDetail = await api.getSubject(active_subject_id)
+        } catch { /* subject detail fetch fallback */ }
+      }
+
+      setActiveSubjectDetail(subjDetail)
+
+      if (!subjDetail) {
+        setStats(null)
+        setLogs([])
+        setCompleteness([])
+        return
+      }
+
+      // 2. Fetch stats, logs, completeness for current active subject
+      const [s, l, c] = await Promise.all([
+        api.getStats().catch(() => null),
+        api.getLogs(8).catch(() => []),
+        api.getCompleteness().catch(() => []),
+      ])
+
+      setStats(s)
+      setLogs(l)
+      setCompleteness(c)
+    } catch {
+      /* ignore loading errors */
+    } finally {
+      setLoading(false)
+    }
   }, [])
+
+  useEffect(() => {
+    loadDashboardData()
+
+    const handleSubjectChange = () => {
+      loadDashboardData()
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('activeSubjectChanged', handleSubjectChange)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('activeSubjectChanged', handleSubjectChange)
+      }
+    }
+  }, [loadDashboardData])
 
   const qb = stats?.question_bank
   const papers = stats?.papers
+
+  const totalUnits = activeSubject?.units?.length ?? 0
+  const totalChapters = activeSubject?.units?.reduce((sum, u) => sum + (u.chapters?.length ?? 0), 0) ?? 0
 
   const ACTION_ICONS: Record<string, string> = {
     GENERATE: '⚡', APPROVE: '✅', REJECT: '❌',
@@ -36,7 +90,18 @@ export default function DashboardPage() {
     return new Date(iso).toLocaleString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
 
-  if (loading) return (
+  // Find unit number for a chapter from activeSubject units structure
+  function getUnitForChapter(chNum: number): number {
+    if (!activeSubject?.units) return 1
+    for (const u of activeSubject.units) {
+      if (u.chapters?.some(ch => ch.chapter_number === chNum)) {
+        return u.unit_number
+      }
+    }
+    return chNum <= 2 ? 1 : chNum <= 5 ? 2 : 3
+  }
+
+  if (loading && !activeSubject) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '60vh' }}>
       <div style={{ textAlign: 'center' }}>
         <div className="spinner" style={{ margin: '0 auto 1rem', width: 32, height: 32 }} />
@@ -49,11 +114,11 @@ export default function DashboardPage() {
     <>
       {/* Hero */}
       <Hero
-        eyebrow="Active Course"
-        title="Generative AI"
-        sub="3 Units · 7 Chapters · Bloom L2 & L3"
+        eyebrow="Active Course Scope"
+        title={activeSubject?.course_name || 'Select Subject'}
+        sub={`${totalUnits} Unit${totalUnits !== 1 ? 's' : ''} · ${totalChapters} Chapter${totalChapters !== 1 ? 's' : ''} · Bloom L2 & L3 Scoped Context`}
         right={
-          <div className="badge badge-green">🟢 Live API</div>
+          <div className="badge badge-green">🟢 Active Context: {activeSubject?.course_code || 'Ready'}</div>
         }
       />
 
@@ -62,7 +127,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Question bank stats */}
-      <SectionLabel>Question Bank</SectionLabel>
+      <SectionLabel>Question Bank Statistics ({activeSubject?.course_name || 'Active Subject'})</SectionLabel>
       <div className="stat-grid">
         <StatCard value={qb?.total ?? 0} label="Total Questions" icon="📋" />
         <StatCard value={qb?.l2 ?? 0} label="L2 Understand" icon="🔵" />
@@ -71,7 +136,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Paper stats */}
-      <SectionLabel style={{ marginTop: '1.5rem' }}>Paper Sets</SectionLabel>
+      <SectionLabel style={{ marginTop: '1.5rem' }}>Generated Paper Sets ({activeSubject?.course_name || 'Active Subject'})</SectionLabel>
       <div className="stat-grid">
         <StatCard value={papers?.total ?? 0} label="Total Sets" icon="📄" />
         <StatCard value={papers?.pending ?? 0} label="In Review" icon="⏳" />
@@ -100,7 +165,7 @@ export default function DashboardPage() {
                 </thead>
                 <tbody>
                   {completeness.map(c => {
-                    const unitNum = c.chapter_number <= 2 ? 1 : c.chapter_number <= 5 ? 2 : 3
+                    const unitNum = getUnitForChapter(c.chapter_number)
                     const pct = Math.min(100, Math.round((c.total / 20) * 100))
                     return (
                       <tr key={c.chapter_number}>
@@ -131,13 +196,13 @@ export default function DashboardPage() {
               </table>
             </div>
           ) : (
-            <EmptyState icon="📭" title="No question bank yet" sub="Upload a question bank to get started" />
+            <EmptyState icon="📭" title="No question bank data" sub="Upload or import a question bank for this subject" />
           )}
         </div>
 
         {/* Activity feed */}
         <div>
-          <SectionLabel>Recent Activity</SectionLabel>
+          <SectionLabel>Subject Activity Log</SectionLabel>
           {logs.length > 0 ? (
             <div className="card" style={{ overflow: 'hidden' }}>
               {logs.map((log, i) => (
@@ -162,7 +227,7 @@ export default function DashboardPage() {
               ))}
             </div>
           ) : (
-            <EmptyState icon="🕐" title="No activity yet" />
+            <EmptyState icon="🕐" title="No activity for this subject" />
           )}
         </div>
       </div>
@@ -171,10 +236,10 @@ export default function DashboardPage() {
       <SectionLabel style={{ marginTop: '2rem' }}>Quick Actions</SectionLabel>
       <div className="grid-4">
         <button className="btn btn-secondary btn-full" onClick={() => router.push('/questions')}>
-          📋 Upload Question Bank
+          📋 Question Bank
         </button>
-        <button className="btn btn-secondary btn-full" onClick={() => router.push('/lesson-plan')}>
-          📖 Upload Lesson Plan
+        <button className="btn btn-secondary btn-full" onClick={() => router.push('/course')}>
+          📖 Course Setup
         </button>
         <button className="btn btn-primary btn-full" onClick={() => router.push('/generate')}>
           ⚡ Generate Paper

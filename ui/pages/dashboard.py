@@ -11,19 +11,29 @@ from config.settings import get_settings
 
 
 def render():
+    from repositories.subject_repo import SubjectRepository
+    subj_repo = SubjectRepository()
+    active_subject = subj_repo.get_active_subject()
+
+    if not active_subject:
+        st.info("👉 Please select a subject to continue.")
+        return
+
     settings = get_settings()
+    subject_id = active_subject["subject_id"]
 
     # ── Fetch data ─────────────────────────────────────────────────────────────
     with get_session() as session:
-        total_questions = session.query(QuestionDB).count()
-        l2_count = session.query(QuestionDB).filter(QuestionDB.bloom_level == "L2").count()
-        l3_count = session.query(QuestionDB).filter(QuestionDB.bloom_level == "L3").count()
-        total_sets  = session.query(PaperSetDB).count()
+        total_questions = session.query(QuestionDB).filter(QuestionDB.subject_id == subject_id).count()
+        l2_count = session.query(QuestionDB).filter(QuestionDB.subject_id == subject_id, QuestionDB.bloom_level == "L2").count()
+        l3_count = session.query(QuestionDB).filter(QuestionDB.subject_id == subject_id, QuestionDB.bloom_level == "L3").count()
+        total_sets  = session.query(PaperSetDB).filter(PaperSetDB.subject_id == subject_id).count()
         pending_sets = session.query(PaperSetDB).filter(
+            PaperSetDB.subject_id == subject_id,
             PaperSetDB.status.in_(["GENERATED", "UNDER_REVIEW", "CHANGES_REQUESTED"])
         ).count()
-        approved_sets = session.query(PaperSetDB).filter(PaperSetDB.status == "APPROVED").count()
-        exported_sets = session.query(PaperSetDB).filter(PaperSetDB.status == "EXPORTED").count()
+        approved_sets = session.query(PaperSetDB).filter(PaperSetDB.subject_id == subject_id, PaperSetDB.status == "APPROVED").count()
+        exported_sets = session.query(PaperSetDB).filter(PaperSetDB.subject_id == subject_id, PaperSetDB.status == "EXPORTED").count()
 
         logs = [
             {"action": log.action, "timestamp": log.timestamp, "paper_set_id": log.paper_set_id}
@@ -40,7 +50,7 @@ def render():
         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem;">
             <div>
                 <div class="hero-label">Active Course</div>
-                <div class="hero-title">Generative AI</div>
+                <div class="hero-title">{active_subject['course_name']}</div>
                 <div class="hero-sub">3 Units · 7 Chapters · Bloom L2 &amp; L3</div>
             </div>
             <div style="text-align:right;">

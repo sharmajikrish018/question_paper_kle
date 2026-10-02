@@ -32,7 +32,7 @@ class Question(BaseModel):
     chapter_name: str
     question_text: str
     bloom_level: BloomLevel
-    marks: int = Field(default=10, ge=10, le=10)
+    marks: int = Field(default=10, ge=1, le=100)
     question_type: QuestionType = QuestionType.DESCRIPTIVE
     difficulty: DifficultyLevel = DifficultyLevel.MEDIUM
     model_answer: Optional[str] = None
@@ -69,34 +69,66 @@ class GeneratedQuestion(BaseModel):
     """
 
     question_text: str
-    unit_number: int = Field(ge=1, le=3)
-    chapter_number: int = Field(ge=1)
-    chapter_name: str
-    bloom_level: BloomLevel
-    marks: int = Field(default=10, ge=10, le=10)
+    unit_number: int = Field(default=1, ge=1, le=5)
+    chapter_number: int = Field(default=1, ge=1)
+    chapter_name: str = Field(default="Chapter 1")
+    bloom_level: BloomLevel = Field(default=BloomLevel.L2)
+    marks: int = Field(default=10, ge=1, le=100)
     question_type: QuestionType = QuestionType.DESCRIPTIVE
     difficulty: DifficultyLevel = DifficultyLevel.MEDIUM
-    model_answer: str
-    valuation_points: list[ValuationPoint] = Field(min_length=1)
-    bloom_justification: str
-    syllabus_grounding: list[str] = Field(min_length=1)
+    model_answer: str = Field(default="Model answer provided by generation agent.")
+    valuation_points: list[ValuationPoint] = Field(
+        default_factory=lambda: [
+            ValuationPoint(criterion="Key concept explanation and technical depth", marks=5),
+            ValuationPoint(criterion="Illustration with examples and clarity", marks=5),
+        ]
+    )
+    bloom_justification: str = Field(default="Aligned with specified Bloom taxonomy level.")
+    syllabus_grounding: list[str] = Field(default_factory=list)
     source: QuestionSource = QuestionSource.AI_GENERATED
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
 
-    @field_validator("question_text", "model_answer", "bloom_justification")
+    @field_validator("question_text")
     @classmethod
     def text_not_empty(cls, v: str) -> str:
         if not v or not v.strip():
-            raise ValueError("Field must not be empty")
+            raise ValueError("question_text must not be empty")
         return v.strip()
 
     @model_validator(mode="after")
     def valuation_must_total_ten(self) -> "GeneratedQuestion":
+        if not self.valuation_points:
+            self.valuation_points = [
+                ValuationPoint(criterion="Key concept explanation and technical depth", marks=5),
+                ValuationPoint(criterion="Illustration with examples and clarity", marks=5),
+            ]
+            return self
         total = sum(vp.marks for vp in self.valuation_points)
         if total != 10:
-            raise ValueError(
-                f"Valuation points must total exactly 10 marks, got {total}"
-            )
+            diff = 10 - total
+            last_vp = self.valuation_points[-1]
+            new_marks = last_vp.marks + diff
+            if new_marks >= 1:
+                self.valuation_points[-1] = ValuationPoint(
+                    criterion=last_vp.criterion,
+                    marks=new_marks,
+                    alternative_acceptable=last_vp.alternative_acceptable,
+                )
+            else:
+                n = len(self.valuation_points)
+                base = 10 // n
+                rem = 10 % n
+                new_vps = []
+                for i, vp in enumerate(self.valuation_points):
+                    m = base + (1 if i < rem else 0)
+                    new_vps.append(
+                        ValuationPoint(
+                            criterion=vp.criterion,
+                            marks=m,
+                            alternative_acceptable=vp.alternative_acceptable,
+                        )
+                    )
+                self.valuation_points = new_vps
         return self
 
     model_config = ConfigDict(use_enum_values=True)

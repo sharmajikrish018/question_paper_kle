@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { api, type PaperListItem, type ValidationReport } from '@/lib/api'
-import { PageHeader, SectionLabel, Badge, Alert, Spinner, EmptyState } from '@/components/ui'
+import { PageHeader, SectionLabel, Badge, Alert, Spinner, EmptyState, ActiveSubjectBanner } from '@/components/ui'
 
 export default function ValidationPage() {
   const [papers, setPapers] = useState<PaperListItem[]>([])
@@ -10,7 +10,24 @@ export default function ValidationPage() {
   const [report, setReport] = useState<ValidationReport | null>(null)
   const [loading, setLoading] = useState(false)
 
-  useEffect(() => { api.listPapers().then(setPapers).catch(() => {}) }, [])
+  useEffect(() => {
+    api.listPapers().then(setPapers).catch(() => {})
+
+    const handleSubjectChange = () => {
+      setSelected(null)
+      setReport(null)
+      api.listPapers().then(setPapers).catch(() => {})
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('activeSubjectChanged', handleSubjectChange)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('activeSubjectChanged', handleSubjectChange)
+      }
+    }
+  }, [])
 
   async function loadReport(id: string) {
     setSelected(id); setReport(null); setLoading(true)
@@ -31,6 +48,8 @@ export default function ValidationPage() {
   return (
     <>
       <PageHeader title="Validation Reports" subtitle="View per-paper-set validation results and rule findings" />
+
+      <ActiveSubjectBanner />
 
       <div className="flex gap-6" style={{ alignItems: 'flex-start' }}>
         {/* List */}

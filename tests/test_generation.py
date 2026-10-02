@@ -300,24 +300,24 @@ class TestValuationScheme:
         assert total == 10
 
     def test_valuation_invalid_total_raises(self):
-        """Valuation points not summing to 10 must raise ValidationError."""
+        """Valuation points not summing to 10 must be auto-balanced to 10."""
         from models.question import GeneratedQuestion
-        from pydantic import ValidationError
 
-        with pytest.raises(ValidationError):
-            GeneratedQuestion(
-                question_text="Explain GAN",
-                unit_number=1,
-                chapter_number=1,
-                chapter_name="Chapter 1",
-                bloom_level="L2",
-                marks=10,
-                model_answer="Answer",
-                valuation_points=[
-                    {"criterion": "Point 1", "marks": 5},
-                    {"criterion": "Point 2", "marks": 3},
-                    # Sum is 8, not 10
-                ],
-                bloom_justification="Tests understanding",
-                syllabus_grounding=["GAN basics"],
-            )
+        q = GeneratedQuestion(
+            question_text="Explain GAN",
+            unit_number=1,
+            chapter_number=1,
+            chapter_name="Chapter 1",
+            bloom_level="L2",
+            marks=10,
+            model_answer="Answer",
+            valuation_points=[
+                {"criterion": "Point 1", "marks": 5},
+                {"criterion": "Point 2", "marks": 3},
+                # Sum is 8, not 10
+            ],
+            bloom_justification="Tests understanding",
+            syllabus_grounding=["GAN basics"],
+        )
+        total = sum(vp.marks for vp in q.valuation_points)
+        assert total == 10

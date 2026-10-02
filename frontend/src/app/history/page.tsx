@@ -2,15 +2,28 @@
 
 import { useEffect, useState } from 'react'
 import { api, type AuditLog, type PaperListItem } from '@/lib/api'
-import { PageHeader, SectionLabel, Badge, EmptyState } from '@/components/ui'
+import { PageHeader, SectionLabel, Badge, EmptyState, ActiveSubjectBanner } from '@/components/ui'
 
 export default function HistoryPage() {
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [papers, setPapers] = useState<PaperListItem[]>([])
 
-  useEffect(() => {
+  const loadHistory = () => {
     api.getLogs(50).then(setLogs).catch(() => {})
     api.listPapers().then(setPapers).catch(() => {})
+  }
+
+  useEffect(() => {
+    loadHistory()
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('activeSubjectChanged', loadHistory)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('activeSubjectChanged', loadHistory)
+      }
+    }
   }, [])
 
   function formatDate(iso?: string) {
@@ -37,8 +50,9 @@ export default function HistoryPage() {
     <>
       <PageHeader title="Usage History" subtitle="Complete audit trail and paper history" />
 
-      <div className="grid-2" style={{ gap: '2rem', alignItems: 'start' }}>
+      <ActiveSubjectBanner />
 
+      <div className="grid-2" style={{ gap: '2rem', alignItems: 'start' }}>
         {/* Audit log */}
         <div>
           <SectionLabel>Audit Log</SectionLabel>

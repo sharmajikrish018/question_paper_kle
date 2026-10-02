@@ -9,6 +9,12 @@ from repositories.database import get_session, UsageHistoryDB
 
 
 def render():
+    from repositories.subject_repo import SubjectRepository
+    active_subject = SubjectRepository().get_active_subject()
+    if not active_subject:
+        st.info("👉 Please select a subject to continue.")
+        return
+
     st.markdown("## 📊 Usage History")
     st.markdown("Track which questions have been used in previously generated papers.")
 

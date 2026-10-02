@@ -1,6 +1,6 @@
 """
 repositories/audit_repo.py
-Audit log repository.
+Audit log repository. All entries are scoped by subject_id.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ class AuditRepository:
     def log(
         self,
         action: str,
+        subject_id: str = "default-subject",
         details: Optional[dict[str, Any]] = None,
         request_id: Optional[str] = None,
         paper_set_id: Optional[str] = None,
@@ -24,6 +25,7 @@ class AuditRepository:
     ) -> None:
         with get_session() as session:
             session.add(AuditLogDB(
+                subject_id=subject_id,
                 request_id=request_id,
                 paper_set_id=paper_set_id,
                 action=action,
@@ -32,14 +34,12 @@ class AuditRepository:
                 timestamp=datetime.utcnow(),
             ))
 
-    def get_recent(self, limit: int = 50) -> list[dict]:
+    def get_recent(self, limit: int = 50, subject_id: Optional[str] = None) -> list[dict]:
         with get_session() as session:
-            rows = (
-                session.query(AuditLogDB)
-                .order_by(AuditLogDB.timestamp.desc())
-                .limit(limit)
-                .all()
-            )
+            q = session.query(AuditLogDB).order_by(AuditLogDB.timestamp.desc())
+            if subject_id:
+                q = q.filter(AuditLogDB.subject_id == subject_id)
+            rows = q.limit(limit).all()
             return [
                 {
                     "id": r.id,
@@ -52,4 +52,3 @@ class AuditRepository:
                 }
                 for r in rows
             ]
-

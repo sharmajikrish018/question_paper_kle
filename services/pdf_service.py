@@ -147,92 +147,219 @@ def _header_table(title: str, subtitle: str, meta: str, is_draft: bool = False):
 # 1. QUESTION PAPER PDF
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ── Question Table Metadata Helpers ──────────────────────────────────────────
+
+def _get_sl_no(q: Any) -> str:
+    if isinstance(q, dict):
+        main_q = q.get("main_q") or q.get("main_question_number") or 1
+        part = q.get("part") or "a"
+    else:
+        main_q = getattr(q, "main_question_number", 1)
+        part = getattr(q, "part", "a")
+    return f"{main_q}{part}"
+
+
+def _get_q_text(q: Any) -> str:
+    if isinstance(q, dict):
+        return q.get("question_text", "")
+    return getattr(q, "question_text", "") or ""
+
+
+def _get_marks(q: Any) -> str:
+    if isinstance(q, dict):
+        return str(q.get("marks", 10))
+    return str(getattr(q, "marks", 10))
+
+
+def _get_co(q: Any) -> str:
+    if isinstance(q, dict):
+        co = q.get("co")
+        unit = q.get("unit_number", 1)
+    else:
+        co = getattr(q, "co", None)
+        unit = getattr(q, "unit_number", 1)
+    if co:
+        return str(co)
+    return f"CO{unit or 1}"
+
+
+def _get_bl(q: Any) -> str:
+    if isinstance(q, dict):
+        bl = q.get("bloom_level", "L2")
+    else:
+        bl = getattr(q, "bloom_level", "L2")
+    bl_str = bl.value if hasattr(bl, "value") else str(bl)
+    if bl_str.upper().startswith("BLOOMLEVEL."):
+        bl_str = bl_str.split(".")[-1]
+    return bl_str
+
+
+def _get_po(q: Any) -> str:
+    if isinstance(q, dict):
+        po = q.get("po")
+        main_q = q.get("main_q") or q.get("main_question_number") or 1
+    else:
+        po = getattr(q, "po", None)
+        main_q = getattr(q, "main_question_number", 1)
+    if po:
+        return str(po)
+    return str(((main_q - 1) % 2) + 1)
+
+
+def _get_pi_code(q: Any) -> str:
+    if isinstance(q, dict):
+        pi = q.get("pi_code")
+        marks = q.get("marks", 10)
+    else:
+        pi = getattr(q, "pi_code", None)
+        marks = getattr(q, "marks", 10)
+    if pi:
+        return str(pi)
+    return "2.1.3" if marks >= 10 else "1.4.1"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 1. QUESTION PAPER PDF
+# ══════════════════════════════════════════════════════════════════════════════
+
 def generate_paper_pdf(
     paper_set,          # PaperSet domain object
     academic_year: str = "",
-    course_name: str = "Generative AI",
+    course_name: str = "Agentic AI",
+    course_code: str = "26ECAC401",
     department: str = "Department of Computer Science",
     is_draft: bool = False,
 ) -> bytes:
-    """Generate a formatted question paper PDF. Returns raw bytes."""
+    """Generate a formal university examination question paper PDF in A4 tabular format."""
     rl = _rl()
     buf = io.BytesIO()
 
     doc = rl["SimpleDocTemplate"](
         buf, pagesize=rl["A4"],
-        leftMargin=20*rl["mm"], rightMargin=20*rl["mm"],
-        topMargin=18*rl["mm"], bottomMargin=18*rl["mm"],
+        leftMargin=15*rl["mm"], rightMargin=15*rl["mm"],
+        topMargin=15*rl["mm"], bottomMargin=15*rl["mm"],
     )
 
-    exam_type = paper_set.exam_type if isinstance(paper_set.exam_type, str) else paper_set.exam_type.value
-    is_minor = exam_type == "MINOR"
-    duration = "75 minutes" if is_minor else "180 minutes"
-    max_marks = "40" if is_minor else "100"
-    exam_label = "Minor / Internal Examination" if is_minor else "End-Semester Examination"
+    exam_type_val = paper_set.exam_type if isinstance(paper_set.exam_type, str) else paper_set.exam_type.value
+    is_minor = (exam_type_val == "MINOR")
 
-    s = _make_styles()
+    # Derive a human-readable sub-type label from the set_id or exam_type
+    # e.g. set_id "MINOR-SET-A-123456" → label stays generic; or "ISA-I" passed explicitly
+    set_id_str = getattr(paper_set, "set_id", "") or ""
+    isa_label = "ISA-I"  # default
+    if "ISA-II" in set_id_str.upper() or "ISA2" in set_id_str.upper():
+        isa_label = "ISA-II"
+    elif "ISA-I" in set_id_str.upper() or "ISA1" in set_id_str.upper():
+        isa_label = "ISA-I"
+
+    if is_minor:
+        header_title = getattr(paper_set, "exam_title", None) or \
+            f"Question Paper for Minor Examination ({isa_label})"
+        default_duration = "60 mins"
+        default_max_marks = "30"
+        default_note = "Note: Answer any two full questions. Each full question carries equal marks."
+    else:
+        header_title = getattr(paper_set, "exam_title", None) or \
+            "Question Paper for End Semester Assessment (ESA)"
+        default_duration = "180 mins"
+        default_max_marks = "100"
+        default_note = "Note: Answer any two full questions from Unit 1 & 2, and one from Unit 3. Each full question carries equal marks."
+
+    duration_str = getattr(paper_set, "duration", None) or default_duration
+    max_marks_str = str(getattr(paper_set, "max_marks", None) or default_max_marks)
+    c_code_str = getattr(paper_set, "course_code", None) or course_code or "26ECAC401"
+    c_title_str = getattr(paper_set, "course_title", None) or course_name or "Agentic AI"
+    note_str = getattr(paper_set, "instructions", None) or default_note
+    if not (note_str.startswith("Note:") or note_str.startswith("Note :")):
+        note_str = f"Note: {note_str}"
+
     Paragraph = rl["Paragraph"]
     Spacer = rl["Spacer"]
-    HRFlowable = rl["HRFlowable"]
     Table = rl["Table"]
     TableStyle = rl["TableStyle"]
-    KeepTogether = rl["KeepTogether"]
+    colors = rl["colors"]
     mm = rl["mm"]
+    PS = rl["ParagraphStyle"]
+
+    s_draft = PS("DraftText", fontSize=9, fontName="Helvetica-Bold", textColor=_color(_RED), alignment=rl["TA_CENTER"], leading=11)
+    s_title = PS("HeaderTitle", fontSize=11, fontName="Helvetica-Bold", textColor=_color(_BLACK), alignment=rl["TA_CENTER"], leading=14)
+    s_cell = PS("HeaderCell", fontSize=9.5, fontName="Helvetica", textColor=_color(_BLACK), alignment=rl["TA_LEFT"], leading=13)
+    s_note = PS("HeaderNote", fontSize=9.5, fontName="Helvetica-Oblique", textColor=_color(_BLACK), alignment=rl["TA_LEFT"], leading=13)
+
+    s_th = PS("TableTH", fontSize=9, fontName="Helvetica-Bold", textColor=_color(_BLACK), alignment=rl["TA_CENTER"], leading=11)
+    s_td_center = PS("TableTDCenter", fontSize=9, fontName="Helvetica", textColor=_color(_BLACK), alignment=rl["TA_CENTER"], leading=12)
+    s_td_left = PS("TableTDLeft", fontSize=9.5, fontName="Helvetica", textColor=_color(_BLACK), alignment=rl["TA_LEFT"], leading=13)
 
     story = []
 
-    # ── Header ────────────────────────────────────────────────────────────────
-    story.append(_header_table(
-        title=f"{course_name}",
-        subtitle=f"{exam_label}  |  Set: {paper_set.set_id}",
-        meta=f"{department}  |  Duration: {duration}  |  Max Marks: {max_marks}"
-             + (f"  |  Academic Year: {academic_year}" if academic_year else ""),
-        is_draft=is_draft,
-    ))
-    story.append(Spacer(1, 8*mm))
+    if is_draft:
+        story.append(Paragraph("DRAFT — NOT APPROVED — FOR REVIEW ONLY", s_draft))
+        story.append(Spacer(1, 2*mm))
 
-    # ── Instructions ──────────────────────────────────────────────────────────
-    if is_minor:
-        instr = "Answer any TWO complete questions. Each complete question carries 20 marks."
-    else:
-        instr = (
-            "Unit 1 & 2: Answer any TWO complete questions from each unit. "
-            "Unit 3: Answer any ONE complete question. Each complete question carries 20 marks."
-        )
-    story.append(Paragraph(f"<b>General Instructions:</b> {instr}", s["body"]))
-    story.append(HRFlowable(width="100%", thickness=1, color=_color(_BLUE), spaceAfter=6))
+    # ── HEADER TABLE ──────────────────────────────────────────────────────────
+    # Printable width: 595.27 - 85.04 = 510.23 pt (504 pt total width)
+    header_data = [
+        [Paragraph(f"<b>{header_title}</b>", s_title), ""],
+        [Paragraph(f"<b>Course Code:</b> {c_code_str}", s_cell), Paragraph(f"<b>Course Title:</b> {c_title_str}", s_cell)],
+        [Paragraph(f"<b>Duration:</b> {duration_str}", s_cell), Paragraph(f"<b>Max. Marks:</b> {max_marks_str}", s_cell)],
+        [Paragraph(f"<b>{note_str}</b>", s_note), ""],
+    ]
 
-    # ── Questions ─────────────────────────────────────────────────────────────
+    header_table = Table(header_data, colWidths=[252, 252])
+    header_table.setStyle(TableStyle([
+        ("SPAN", (0, 0), (1, 0)),
+        ("SPAN", (0, 3), (1, 3)),
+        ("GRID", (0, 0), (-1, -1), 0.8, colors.black),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 7),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 4*mm))
+
+    # ── QUESTION TABLE ────────────────────────────────────────────────────────
+    # Columns: Sl.No. | Questions | Marks | CO | BL | PO | PI Code
+    col_widths = [36, 294, 36, 36, 36, 36, 36]  # Sum = 504 pt
+
+    headers = ["Sl.No.", "Questions", "Marks", "CO", "BL", "PO", "PI Code"]
+    q_table_data = [[Paragraph(f"<b>{h}</b>", s_th) for h in headers]]
+
     questions = sorted(paper_set.questions, key=lambda q: (q.main_question_number, q.part))
-    current_main = None
 
     for pq in questions:
-        block = []
-        if pq.main_question_number != current_main:
-            current_main = pq.main_question_number
-            # Unit label for end-sem
-            if not is_minor:
-                unit_lbl = f"  (Unit {pq.unit_number})"
-            else:
-                unit_lbl = ""
-            block.append(Paragraph(f"Q{pq.main_question_number}.{unit_lbl}", s["q_number"]))
+        sl_no = _get_sl_no(pq)
+        qt = _get_q_text(pq).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+        marks = _get_marks(pq)
+        co = _get_co(pq)
+        bl = _get_bl(pq)
+        po = _get_po(pq)
+        pi_code = _get_pi_code(pq)
 
-        # Part line
-        qt = pq.question_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        block.append(Paragraph(
-            f"<b>({pq.part})</b>  {qt}",
-            s["q_text"]
-        ))
-        block.append(Paragraph(f"[{pq.marks} Marks]", s["marks"]))
-        story.append(KeepTogether(block))
+        q_table_data.append([
+            Paragraph(sl_no, s_td_center),
+            Paragraph(qt, s_td_left),
+            Paragraph(marks, s_td_center),
+            Paragraph(co, s_td_center),
+            Paragraph(bl, s_td_center),
+            Paragraph(po, s_td_center),
+            Paragraph(pi_code, s_td_center),
+        ])
 
-    story.append(Spacer(1, 6*mm))
-    story.append(HRFlowable(width="100%", thickness=0.5, color=_color(_SLATE)))
-    story.append(Paragraph(
-        f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  "
-        f"CONFIDENTIAL — Faculty use only",
-        s["footer"]
-    ))
+    q_table = Table(q_table_data, colWidths=col_widths, repeatRows=1)
+    q_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.8, colors.black),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(q_table)
 
     doc.build(story)
     return buf.getvalue()

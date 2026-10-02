@@ -90,16 +90,24 @@ class ValidationAgent:
             ))
 
         # ── RULE V004: Marks per subquestion ──────────────────────────────────
-        wrong_marks = [q.slot_id for q in qs if q.marks != 10]
+        sub_pattern = getattr(blueprint, "sub_question_marks", []) or [getattr(blueprint, "marks_per_part", 10)]
+        expected_part_marks = {
+            "a": sub_pattern[0] if len(sub_pattern) > 0 else 10,
+            "b": sub_pattern[1] if len(sub_pattern) > 1 else sub_pattern[0],
+        }
+        wrong_marks = [
+            q.slot_id for q in qs
+            if q.marks != expected_part_marks.get(q.part, getattr(blueprint, "marks_per_part", 10))
+        ]
         if wrong_marks:
             findings.append(ValidationFinding(
                 rule_id="V004",
                 severity="ERROR",
-                message="Subquestion(s) do not carry 10 marks",
-                expected=10,
+                message=f"Subquestion(s) do not match expected marking scheme {expected_part_marks}",
+                expected=str(expected_part_marks),
                 actual=f"{wrong_marks}",
                 affected_questions=wrong_marks,
-                suggested_action="All subquestions must be 10 marks",
+                suggested_action="Ensure all subquestions match the saved marking scheme",
             ))
 
         # ── RULE V005: Bloom L2 count ─────────────────────────────────────────
@@ -148,15 +156,15 @@ class ValidationAgent:
         for q in qs:
             if q.valuation_scheme:
                 total_marks = sum(vp.marks for vp in q.valuation_scheme.valuation_points)
-                if total_marks != 10:
+                if total_marks != q.marks:
                     findings.append(ValidationFinding(
                         rule_id="V008",
                         severity="ERROR",
-                        message=f"Valuation scheme total ≠ 10 for slot {q.slot_id}",
-                        expected=10,
+                        message=f"Valuation scheme total ({total_marks}) ≠ question marks ({q.marks}) for slot {q.slot_id}",
+                        expected=q.marks,
                         actual=total_marks,
                         affected_questions=[q.slot_id],
-                        suggested_action="Correct valuation points to sum to 10",
+                        suggested_action=f"Correct valuation points to sum to {q.marks}",
                     ))
 
         # ── RULE V009: Missing valuation schemes ──────────────────────────────

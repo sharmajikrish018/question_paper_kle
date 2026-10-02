@@ -86,6 +86,7 @@ class QuestionDB(Base):
     __tablename__ = "questions"
     id = Column(Integer, primary_key=True)
     question_id = Column(String, unique=True, nullable=False, index=True)
+    subject_id = Column(String, nullable=True, index=True)
     course_name = Column(String, default="Generative AI")
     unit_number = Column(Integer, nullable=False)
     chapter_number = Column(Integer, nullable=False)
@@ -110,6 +111,7 @@ class GeneratedQuestionDB(Base):
     __tablename__ = "generated_questions"
     id = Column(Integer, primary_key=True)
     generated_id = Column(String, unique=True, nullable=False, index=True)
+    subject_id = Column(String, nullable=True, index=True)
     paper_set_id = Column(String, nullable=True, index=True)
     unit_number = Column(Integer, nullable=False)
     chapter_number = Column(Integer, nullable=False)
@@ -131,6 +133,7 @@ class PaperRequestDB(Base):
     __tablename__ = "paper_requests"
     id = Column(Integer, primary_key=True)
     request_id = Column(String, unique=True, nullable=False)
+    subject_id = Column(String, nullable=True, index=True)
     exam_type = Column(String, nullable=False)
     course_name = Column(String, default="Generative AI")
     academic_year = Column(String, nullable=True)
@@ -150,6 +153,7 @@ class PaperRequestDB(Base):
 class PaperSetDB(Base):
     __tablename__ = "paper_sets"
     id = Column(Integer, primary_key=True)
+    subject_id = Column(String, nullable=True, index=True)
     request_id = Column(String, ForeignKey("paper_requests.request_id"), nullable=False)
     set_id = Column(String, unique=True, nullable=False)
     set_index = Column(Integer, nullable=False)
@@ -171,6 +175,7 @@ class PaperSetDB(Base):
 class PaperQuestionDB(Base):
     __tablename__ = "paper_questions"
     id = Column(Integer, primary_key=True)
+    subject_id = Column(String, nullable=True, index=True)
     paper_set_id = Column(String, ForeignKey("paper_sets.set_id"), nullable=False)
     slot_id = Column(String, nullable=False)  # Q1a, Q2b …
     main_question_number = Column(Integer, nullable=False)
@@ -195,6 +200,7 @@ class PaperQuestionDB(Base):
 class UsageHistoryDB(Base):
     __tablename__ = "usage_history"
     id = Column(Integer, primary_key=True)
+    subject_id = Column(String, nullable=True, index=True)
     question_id = Column(String, nullable=False, index=True)
     source = Column(String, nullable=False)
     paper_set_id = Column(String, nullable=False)
@@ -206,6 +212,7 @@ class UsageHistoryDB(Base):
 class AuditLogDB(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True)
+    subject_id = Column(String, nullable=True, index=True)
     request_id = Column(String, nullable=True)
     paper_set_id = Column(String, nullable=True)
     action = Column(String, nullable=False)
@@ -217,6 +224,7 @@ class AuditLogDB(Base):
 class UploadedFileDB(Base):
     __tablename__ = "uploaded_files"
     id = Column(Integer, primary_key=True)
+    subject_id = Column(String, nullable=True, index=True)
     filename = Column(String, nullable=False)
     original_filename = Column(String, nullable=False)
     category = Column(String, nullable=False)  # question_bank | lesson_plan | university_template
@@ -232,6 +240,14 @@ class AppSettingDB(Base):
     id = Column(Integer, primary_key=True)
     key = Column(String, unique=True, nullable=False)
     value = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class SubjectContextDB(Base):
+    __tablename__ = "subject_context"
+    id = Column(Integer, primary_key=True)
+    subject_id = Column(String, unique=True, nullable=False, index=True)
+    context_json = Column(Text, nullable=True)  # JSON blob
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
@@ -281,6 +297,7 @@ def _migrate_columns() -> None:
     """
     Idempotent column migrations for tables that may already exist.
     Uses SQLite PRAGMA to check existing columns before attempting ALTER TABLE.
+    Also ensures every subject-owned row has a subject_id (assigns to 'default-subject').
     """
     import sqlalchemy as _sa
 
@@ -289,6 +306,14 @@ def _migrate_columns() -> None:
         ("courses", "subject_id",          "TEXT"),
         ("courses", "minor_configuration", "TEXT"),
         ("courses", "lp_metadata",         "TEXT"),
+        ("questions",           "subject_id", "TEXT"),
+        ("generated_questions", "subject_id", "TEXT"),
+        ("paper_requests",      "subject_id", "TEXT"),
+        ("paper_sets",          "subject_id", "TEXT"),
+        ("paper_questions",     "subject_id", "TEXT"),
+        ("usage_history",       "subject_id", "TEXT"),
+        ("audit_logs",          "subject_id", "TEXT"),
+        ("uploaded_files",      "subject_id", "TEXT"),
     ]
 
     with engine.connect() as conn:
@@ -304,6 +329,51 @@ def _migrate_columns() -> None:
                 logging.getLogger(__name__).warning(
                     f"[init_db] migration {table}.{col} skipped: {exc}"
                 )
+
+    # Ensure a default subject exists and assign orphan rows to it
+    _ensure_default_subject()
+
+
+def _ensure_default_subject() -> None:
+    """Create 'default-subject' if no subjects exist; assign all NULL subject_id rows to it."""
+    import sqlalchemy as _sa
+    import logging
+    log = logging.getLogger(__name__)
+
+    with engine.connect() as conn:
+        # Check if any course rows exist
+        result = conn.execute(_sa.text("SELECT subject_id FROM courses LIMIT 1"))
+        first = result.fetchone()
+        default_slug = first[0] if first else None
+
+        # If no courses at all, create the default subject row
+        if first is None:
+            conn.execute(_sa.text(
+                "INSERT INTO courses (subject_id, name, code, created_at, updated_at) "
+                "VALUES ('default-subject', 'Default Subject', 'DEFAULT', datetime('now'), datetime('now'))"
+            ))
+            conn.commit()
+            default_slug = "default-subject"
+            log.info("[init_db] Created 'default-subject' course.")
+
+        if not default_slug:
+            return
+
+        # Assign NULL subject_id rows in all subject-owned tables to default_slug
+        owned_tables = [
+            "questions", "generated_questions", "paper_requests",
+            "paper_sets", "paper_questions", "usage_history",
+            "audit_logs", "uploaded_files",
+        ]
+        for tbl in owned_tables:
+            try:
+                conn.execute(_sa.text(
+                    f"UPDATE {tbl} SET subject_id = :slug WHERE subject_id IS NULL"
+                ), {"slug": default_slug})
+            except Exception as exc:
+                log.warning(f"[init_db] could not update {tbl}.subject_id: {exc}")
+        conn.commit()
+        log.info(f"[init_db] Orphan rows assigned to '{default_slug}'.")
 
 
 

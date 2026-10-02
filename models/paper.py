@@ -61,6 +61,10 @@ class PaperSet(BaseModel):
     approved_at: Optional[datetime] = None
     exported_at: Optional[datetime] = None
     faculty_notes: str = ""
+    exam_title: Optional[str] = None
+    duration: Optional[str] = None
+    max_marks: Optional[int] = None
+    instructions: Optional[str] = None
 
     # Validation result summary
     validation_status: Optional[str] = None

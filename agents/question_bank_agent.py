@@ -96,6 +96,7 @@ class QuestionBankAgent:
 
     def get_available_questions(
         self,
+        subject_id: Optional[str] = None,
         unit_number: Optional[int] = None,
         chapter_number: Optional[int] = None,
         bloom_level: Optional[str] = None,
@@ -104,14 +105,26 @@ class QuestionBankAgent:
         """
         Return approved questions filtered by criteria.
         Used by the selection agent.
-        Now receives domain Question objects directly from the repo.
+        Receives domain Question objects directly from the repo.
         """
+        if not subject_id:
+            from repositories.subject_repo import SubjectRepository
+            subject_id = SubjectRepository().get_active_subject_id() or "genai-001"
         questions = self._repo.get_approved(
+            subject_id=subject_id,
             unit_number=unit_number,
             chapter_number=chapter_number,
             bloom_level=bloom_level,
             exclude_ids=exclude_ids,
         )
+        if not questions and subject_id != "genai-001":
+            questions = self._repo.get_approved(
+                subject_id="genai-001",
+                unit_number=unit_number,
+                chapter_number=chapter_number,
+                bloom_level=bloom_level,
+                exclude_ids=exclude_ids,
+            )
         return questions
 
 

@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 class ValuationAgent:
     """
     Agent node 9.9: Scheme of Valuation Agent.
-    For bank questions: uses stored model answers or generates draft.
-    For AI questions: generates full scheme.
+    For bank questions: uses stored model answers or generates draft once and persists to bank.
+    For AI questions: generated in single call (reused from PaperQuestion).
     All schemes must total exactly 10 marks.
     """
 
@@ -29,20 +29,58 @@ class ValuationAgent:
         self._llm = llm_provider
 
     def generate_scheme(
-        self, pq: PaperQuestion, stored_answer: Optional[str] = None
+        self, pq: PaperQuestion, stored_answer: Optional[str] = None, subject_id: str = "default-subject"
     ) -> ValuationScheme:
         """
         Generate or retrieve valuation scheme for one paper question.
         """
-        if (
-            pq.source == QuestionSource.QUESTION_BANK
-            and stored_answer
-        ):
-            # Use faculty-provided answer if available
-            return self._scheme_from_stored(pq, stored_answer)
+        # 1. Return pre-populated scheme if already present (e.g. from single-call AI generation)
+        if pq.valuation_scheme is not None:
+            return pq.valuation_scheme
 
-        # Generate draft scheme using LLM
-        return self._generate_draft_scheme(pq)
+        is_bank = pq.source == QuestionSource.QUESTION_BANK or str(pq.source) == "QUESTION_BANK"
+
+        # 2. For Bank questions: try stored answer / repo first
+        if is_bank:
+            if stored_answer:
+                return self._scheme_from_stored(pq, stored_answer)
+
+            if pq.question_id:
+                try:
+                    from repositories.question_repo import QuestionRepository
+                    repo = QuestionRepository()
+                    stored_q = repo.get_by_id(pq.question_id, subject_id=subject_id)
+                    if stored_q and (stored_q.model_answer or stored_q.valuation_points):
+                        vp = stored_q.valuation_points or [
+                            ValuationPoint(criterion=f"Key point {i+1}", marks=2) for i in range(5)
+                        ]
+                        return ValuationScheme(
+                            question_ref=pq.question_id,
+                            expected_answer=stored_q.model_answer or "[Stored Answer]",
+                            key_points=[stored_q.model_answer] if stored_q.model_answer else [],
+                            valuation_points=vp,
+                            approval_status="APPROVED",
+                        )
+                except Exception as exc:
+                    logger.debug(f"Bank question lookup failed: {exc}")
+
+        # 3. Call LLM only if missing
+        scheme = self._generate_draft_scheme(pq)
+
+        # 4. If bank question was missing valuation, persist generated valuation back to DB
+        if is_bank and pq.question_id:
+            try:
+                from repositories.question_repo import QuestionRepository
+                repo = QuestionRepository()
+                repo.update(
+                    pq.question_id,
+                    subject_id=subject_id,
+                    model_answer=scheme.expected_answer,
+                )
+            except Exception as exc:
+                logger.warning(f"Could not persist bank valuation to DB: {exc}")
+
+        return scheme
 
     def _scheme_from_stored(
         self, pq: PaperQuestion, answer: str
@@ -51,7 +89,6 @@ class ValuationAgent:
         Build a scheme from a stored faculty model answer.
         Splits evenly if no valuation_points stored.
         """
-        # Create default 5×2 scheme
         vp = [
             ValuationPoint(criterion=f"Key point {i+1}", marks=2)
             for i in range(5)
@@ -91,9 +128,7 @@ class ValuationAgent:
             },
         ]
 
-        # Build a simple internal model
         from pydantic import BaseModel, model_validator
-        from typing import List
 
         class ValuationDraft(BaseModel):
             expected_answer: str
@@ -105,7 +140,6 @@ class ValuationAgent:
             def check_total(self):
                 total = sum(vp.marks for vp in self.valuation_points)
                 if total != 10:
-                    # Auto-adjust last point
                     if self.valuation_points:
                         deficit = 10 - sum(vp.marks for vp in self.valuation_points[:-1])
                         self.valuation_points[-1] = ValuationPoint(
@@ -119,7 +153,6 @@ class ValuationAgent:
                 messages=messages,
                 response_model=ValuationDraft,
                 temperature=0.2,
-                max_tokens=1500,
             )
             return ValuationScheme(
                 question_ref=pq.question_id or pq.generated_id or pq.slot_id,
@@ -131,7 +164,6 @@ class ValuationAgent:
             )
         except Exception as exc:
             logger.error(f"Valuation generation failed: {exc}")
-            # Return minimal draft
             return ValuationScheme(
                 question_ref=pq.question_id or pq.generated_id or pq.slot_id,
                 expected_answer="[Draft — faculty review required]",
@@ -141,3 +173,4 @@ class ValuationAgent:
                 ],
                 approval_status="PENDING",
             )
+

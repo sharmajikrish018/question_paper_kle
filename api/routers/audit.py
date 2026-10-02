@@ -1,24 +1,44 @@
-"""api/routers/audit.py — Audit logs & dashboard stats."""
-from fastapi import APIRouter, Query
+"""api/routers/audit.py — Audit logs & dashboard stats. All queries are subject-scoped."""
+from fastapi import APIRouter, Query, Depends
+from api.deps import get_subject_id
 from repositories.database import get_session, AuditLogDB, QuestionDB, PaperSetDB
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 
 @router.get("/stats")
-def get_stats():
+def get_stats(subject_id: str = Depends(get_subject_id)):
     with get_session() as session:
-        total_questions = session.query(QuestionDB).count()
-        l2_count = session.query(QuestionDB).filter(QuestionDB.bloom_level == "L2").count()
-        l3_count = session.query(QuestionDB).filter(QuestionDB.bloom_level == "L3").count()
-        total_sets = session.query(PaperSetDB).count()
-        pending_sets = session.query(PaperSetDB).filter(
-            PaperSetDB.status.in_(["GENERATED", "UNDER_REVIEW", "CHANGES_REQUESTED"])
+        total_questions = session.query(QuestionDB).filter(
+            QuestionDB.subject_id == subject_id
         ).count()
-        approved_sets = session.query(PaperSetDB).filter(PaperSetDB.status == "APPROVED").count()
-        exported_sets = session.query(PaperSetDB).filter(PaperSetDB.status == "EXPORTED").count()
+        l2_count = session.query(QuestionDB).filter(
+            QuestionDB.subject_id == subject_id,
+            QuestionDB.bloom_level == "L2",
+        ).count()
+        l3_count = session.query(QuestionDB).filter(
+            QuestionDB.subject_id == subject_id,
+            QuestionDB.bloom_level == "L3",
+        ).count()
+        total_sets = session.query(PaperSetDB).filter(
+            PaperSetDB.subject_id == subject_id
+        ).count()
+        pending_sets = session.query(PaperSetDB).filter(
+            PaperSetDB.subject_id == subject_id,
+            PaperSetDB.status.in_(["GENERATED", "UNDER_REVIEW", "CHANGES_REQUESTED"]),
+        ).count()
+        approved_sets = session.query(PaperSetDB).filter(
+            PaperSetDB.subject_id == subject_id,
+            PaperSetDB.status == "APPROVED",
+        ).count()
+        exported_sets = session.query(PaperSetDB).filter(
+            PaperSetDB.subject_id == subject_id,
+            PaperSetDB.status == "EXPORTED",
+        ).count()
 
-        qs = session.query(QuestionDB.chapter_number, QuestionDB.bloom_level).all()
+        qs = session.query(QuestionDB.chapter_number, QuestionDB.bloom_level).filter(
+            QuestionDB.subject_id == subject_id
+        ).all()
 
     completeness: dict = {}
     for ch, bl in qs:
@@ -43,10 +63,14 @@ def get_stats():
 
 
 @router.get("/logs")
-def get_logs(limit: int = Query(20, le=100)):
+def get_logs(
+    limit: int = Query(20, le=100),
+    subject_id: str = Depends(get_subject_id),
+):
     with get_session() as session:
         logs = (
             session.query(AuditLogDB)
+            .filter(AuditLogDB.subject_id == subject_id)
             .order_by(AuditLogDB.timestamp.desc())
             .limit(limit)
             .all()

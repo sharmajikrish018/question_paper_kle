@@ -92,6 +92,36 @@ class LpMetadataSchema(BaseModel):
     raw_text_length: int = 0
 
 
+# ── Examination marking scheme schema ──────────────────────────────────────────
+
+class ExamSchemeSchema(BaseModel):
+    """
+    Marking scheme for one exam type (ISA-I, ISA-II, or ESA).
+    Extracted from model question papers in the last 10 pages of the lesson plan.
+    Faculty can view and edit this before it becomes the source of truth for QP generation.
+    """
+    exam_type: str = ""                       # "ISA-I" | "ISA-II" | "ESA"
+    total_marks: int = 30
+    duration: str = ""
+    instructions: str = ""
+    total_questions: int = 3                  # full questions printed
+    questions_to_attempt: int = 2             # full questions student answers
+    marks_per_full_question: int = 15
+    sub_question_pattern: list[int] = Field(  # marks per sub-part, e.g. [10, 5]
+        default_factory=list,
+        description="Marks per sub-question within one full question"
+    )
+
+
+class MarkingSchemesSchema(BaseModel):
+    """Three separate editable marking scheme slots."""
+    isa1: Optional[ExamSchemeSchema] = None   # ISA-I / Minor 1
+    isa2: Optional[ExamSchemeSchema] = None   # ISA-II / Minor 2
+    esa:  Optional[ExamSchemeSchema] = None   # End-Semester
+
+
+# ── Subject CRUD schemas ───────────────────────────────────────────────────────
+
 class SubjectIn(BaseModel):
     """Payload to create or update a subject."""
     course_name: str = ""
@@ -102,6 +132,9 @@ class SubjectIn(BaseModel):
     units: list[UnitIn] = []
     minor_configuration: MinorConfigSchema = Field(default_factory=MinorConfigSchema)
     lp_metadata: Optional[LpMetadataSchema] = None
+    # Marking schemes extracted from LP model question papers.
+    # Stored inside lp_metadata JSON blob in the DB (no new column needed).
+    marking_schemes: Optional[MarkingSchemesSchema] = None
 
 
 class SubjectOut(BaseModel):
@@ -116,6 +149,7 @@ class SubjectOut(BaseModel):
     units: list[UnitDetail] = []
     minor_configuration: dict = {}
     lp_metadata: dict = {}
+    marking_schemes: Optional[MarkingSchemesSchema] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -168,7 +202,11 @@ class LpParseOut(BaseModel):
     # Minor config (may be empty if LP doesn't specify assessment mapping)
     minor_configuration: MinorConfigSchema = Field(default_factory=MinorConfigSchema)
 
+    # Marking schemes extracted from model question papers (may be None if not found)
+    marking_schemes: Optional[MarkingSchemesSchema] = None
+
     # Parse quality metadata
     confidence: float = 0.0
     warnings: list[str] = []
     raw_text_preview: str = ""
+

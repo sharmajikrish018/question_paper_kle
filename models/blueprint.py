@@ -84,12 +84,14 @@ class MinorBlueprint(BaseModel):
     """
 
     exam_type: ExamType = ExamType.MINOR
+    exam_subtype: str = "ISA-I"  # "ISA-I" | "ISA-II"
     total_printed_questions: int = 6
     total_attempted_marks: int = 40
     duration_minutes: int = 75
     main_question_count: int = 3
     parts_per_question: int = 2
     marks_per_part: int = 10
+    sub_question_marks: list[int] = Field(default_factory=list)  # e.g. [10, 5] from saved scheme
     choice_instruction: str = "Answer any TWO full questions."
 
     # Source allocation
@@ -139,9 +141,12 @@ class EndSemBlueprint(BaseModel):
     """
 
     exam_type: ExamType = ExamType.END_SEM
+    exam_subtype: str = "ESA"
     total_printed_questions: int = 16
     total_attempted_marks: int = 100
     duration_minutes: int = 180
+    sub_question_marks: list[int] = Field(default_factory=list)  # e.g. [10, 10]
+    choice_instruction: str = "Answer any TWO full questions from Unit 1 & 2, and one from Unit 3."
 
     # Source allocation
     source: SourceAllocation = Field(

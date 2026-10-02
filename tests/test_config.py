@@ -113,8 +113,8 @@ class TestDatabaseInit:
             bloom_level=BloomLevel.L2,
             marks=10,
         )
-        repo.upsert(q)
-        loaded = repo.get_by_id("TEST-CRUD-001")
+        repo.upsert(q, subject_id="default-subject")
+        loaded = repo.get_by_id("TEST-CRUD-001", subject_id="default-subject")
         assert loaded is not None
         assert loaded.question_text == q.question_text
 

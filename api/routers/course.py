@@ -19,6 +19,7 @@ from api.schemas.course import (
     SubjectIn, SubjectOut, SubjectListItem,
     ActiveSubjectResponse, SetActiveSubjectIn,
     LpParseOut, ParsedUnitSchema, ChapterIn, MinorConfigSchema,
+    ExamSchemeSchema, MarkingSchemesSchema,
 )
 from repositories.settings_repo import SettingsRepository
 from repositories.subject_repo import SubjectRepository
@@ -93,6 +94,8 @@ async def extract_lesson_plan(file: UploadFile = File(...)):
                 for ch in result.chapters
             ],
             "raw_text_length": len(result.raw_text),
+            "isa_pattern": result.isa_pattern.to_dict() if result.isa_pattern else None,
+            "esa_pattern": result.esa_pattern.to_dict() if result.esa_pattern else None,
         })
         if result.raw_text:
             repo.set("lesson_plan_text", result.raw_text[:50000])
@@ -131,6 +134,15 @@ def _dict_to_subject_out(d: dict) -> SubjectOut:
         )
         for u in d.get("units", [])
     ]
+    lp_meta = d.get("lp_metadata", {})
+    raw_schemes = lp_meta.get("marking_schemes")
+    marking_schemes_obj = None
+    if raw_schemes:
+        try:
+            marking_schemes_obj = MarkingSchemesSchema(**raw_schemes)
+        except Exception:
+            pass
+
     return SubjectOut(
         id=d.get("id"),
         subject_id=d["subject_id"],
@@ -141,7 +153,8 @@ def _dict_to_subject_out(d: dict) -> SubjectOut:
         academic_year=d.get("academic_year", ""),
         units=units,
         minor_configuration=d.get("minor_configuration", {}),
-        lp_metadata=d.get("lp_metadata", {}),
+        lp_metadata=lp_meta,
+        marking_schemes=marking_schemes_obj,
         created_at=d.get("created_at"),
         updated_at=d.get("updated_at"),
     )
@@ -201,7 +214,7 @@ async def parse_lp_for_subject(file: UploadFile = File(...)):
     try:
         from agents.intake_agent import CourseIntakeAgent
         agent = CourseIntakeAgent()
-        result = agent.extract_lesson_plan(tmp_path, page_limit=8)
+        result = agent.extract_lesson_plan(tmp_path, page_limit=60)
 
         # Convert UnitInfo objects to API schema
         units_out = []
@@ -225,6 +238,29 @@ async def parse_lp_for_subject(file: UploadFile = File(...)):
             minor2=result.minor_configuration.minor2,
         )
 
+        # Build marking schemes from extracted exam patterns
+        def _to_scheme(pat) -> ExamSchemeSchema | None:
+            if pat is None:
+                return None
+            return ExamSchemeSchema(
+                exam_type=pat.exam_type,
+                total_marks=pat.total_marks,
+                duration=pat.duration,
+                instructions=pat.instructions,
+                total_questions=pat.total_questions,
+                questions_to_attempt=pat.questions_to_attempt,
+                marks_per_full_question=pat.marks_per_full_question,
+                sub_question_pattern=pat.sub_question_pattern,
+            )
+
+        marking_schemes = MarkingSchemesSchema(
+            isa1=_to_scheme(result.isa1_pattern),
+            isa2=_to_scheme(result.isa2_pattern),
+            esa=_to_scheme(result.esa_pattern),
+        )
+        # Only include marking_schemes if at least one was extracted
+        has_schemes = any([marking_schemes.isa1, marking_schemes.isa2, marking_schemes.esa])
+
         return LpParseOut(
             course_name=result.course_name,
             course_code=result.course_code,
@@ -233,6 +269,7 @@ async def parse_lp_for_subject(file: UploadFile = File(...)):
             academic_year=result.academic_year,
             units=units_out,
             minor_configuration=minor_cfg,
+            marking_schemes=marking_schemes if has_schemes else None,
             confidence=result.confidence,
             warnings=result.warnings,
             raw_text_preview=result.raw_text[:500] if result.raw_text else "",
@@ -269,6 +306,9 @@ def create_subject(body: SubjectIn):
     ]
     minor_cfg = body.minor_configuration.model_dump() if body.minor_configuration else {}
     lp_meta   = body.lp_metadata.model_dump() if body.lp_metadata else {}
+    # Merge marking_schemes into lp_metadata blob (no new DB column needed)
+    if body.marking_schemes:
+        lp_meta["marking_schemes"] = body.marking_schemes.model_dump()
 
     result = repo.create_subject(
         course_name=body.course_name,
@@ -320,6 +360,9 @@ def update_subject(subject_id: str, body: SubjectIn):
     ]
     minor_cfg = body.minor_configuration.model_dump() if body.minor_configuration else {}
     lp_meta   = body.lp_metadata.model_dump() if body.lp_metadata else {}
+    # Merge marking_schemes into lp_metadata blob (no new DB column needed)
+    if body.marking_schemes:
+        lp_meta["marking_schemes"] = body.marking_schemes.model_dump()
 
     result = repo.update_subject(
         subject_id=subject_id,
@@ -340,11 +383,36 @@ def update_subject(subject_id: str, body: SubjectIn):
 @subjects_router.delete("/{subject_id}")
 def delete_subject(subject_id: str):
     repo = SubjectRepository()
+
+    # Block deleting the last remaining subject
+    all_subjects = repo.list_subjects()
+    if len(all_subjects) <= 1:
+        raise HTTPException(409, "Cannot delete the last remaining subject")
+
     ok = repo.delete_subject(subject_id)
     if not ok:
         raise HTTPException(404, f"Subject '{subject_id}' not found")
 
-    # If deleted subject was active, clear active
+    # Cascade: delete questions, papers, audit logs, uploaded files, context
+    from repositories.question_repo import QuestionRepository
+    from repositories.paper_repo import PaperRepository
+    from repositories.database import AuditLogDB, UploadedFileDB, SubjectContextDB, get_session as _gs
+
+    QuestionRepository().delete_by_subject(subject_id)
+    PaperRepository().delete_by_subject(subject_id)
+
+    with _gs() as session:
+        session.query(AuditLogDB).filter(AuditLogDB.subject_id == subject_id).delete()
+        session.query(UploadedFileDB).filter(UploadedFileDB.subject_id == subject_id).delete()
+        session.query(SubjectContextDB).filter(SubjectContextDB.subject_id == subject_id).delete()
+
+    try:
+        from services.file_service import FileService
+        FileService().delete_subject_files(subject_id)
+    except Exception:
+        pass
+
+    # If deleted subject was active, assign a new active subject
     active = repo.get_active_subject_id()
     if active == subject_id:
         remaining = repo.list_subjects()
@@ -361,3 +429,28 @@ def delete_subject(subject_id: str):
                     session.delete(row)
 
     return {"ok": True, "deleted": subject_id}
+
+# ── Subject Context endpoints ──────────────────────────────────────────────────
+
+@subjects_router.get("/{subject_id}/context")
+def get_subject_context(subject_id: str):
+    """Return the stored UI context blob for subject_id."""
+    repo = SubjectRepository()
+    if not repo.get_subject_by_slug(subject_id):
+        raise HTTPException(404, f"Subject '{subject_id}' not found")
+    from repositories.context_repo import SubjectContextRepository
+    return SubjectContextRepository().get(subject_id)
+
+
+@subjects_router.put("/{subject_id}/context")
+def put_subject_context(subject_id: str, body: dict):
+    """Persist the UI context blob for subject_id (JSON, max 64 KB)."""
+    repo = SubjectRepository()
+    if not repo.get_subject_by_slug(subject_id):
+        raise HTTPException(404, f"Subject '{subject_id}' not found")
+    from repositories.context_repo import SubjectContextRepository
+    try:
+        SubjectContextRepository().put(subject_id, body)
+    except ValueError as exc:
+        raise HTTPException(413, str(exc))
+    return {"ok": True}

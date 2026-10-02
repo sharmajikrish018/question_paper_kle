@@ -1,14 +1,71 @@
 /**
  * lib/api.ts — Typed API client for the Prashnopatra FastAPI backend.
  * Usage: import { api } from '@/lib/api'
+ *
+ * Subject isolation: every request automatically carries X-Subject-Id header.
+ * Call api.setActiveSubject(id) when the active subject changes.
  */
 
 const BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api'
 
+// ── Active subject state ─────────────────────────────────────────────────────────────────────
+let _activeSubjectId: string | null = null
+let _abortController: AbortController | null = null
+
+/** Set the active subject. Aborts all in-flight requests from the previous subject. */
+export function setActiveSubject(id: string | null): void {
+  if (id === _activeSubjectId) return
+  // Abort any in-flight requests from old subject
+  if (_abortController) {
+    _abortController.abort()
+  }
+  _activeSubjectId = id
+  _abortController = new AbortController()
+  // Mirror to localStorage for instant restore
+  if (typeof window !== 'undefined') {
+    if (id) {
+      localStorage.setItem('activeSubjectId', id)
+    } else {
+      localStorage.removeItem('activeSubjectId')
+    }
+  }
+}
+
+/** Get the currently active subject id. */
+export function getActiveSubject(): string | null {
+  return _activeSubjectId
+}
+
+/** Initialize from localStorage (call once on app boot). */
+export function initActiveSubjectFromStorage(): string | null {
+  if (typeof window === 'undefined') return null
+  const stored = localStorage.getItem('activeSubjectId')
+  if (stored && !_activeSubjectId) {
+    _activeSubjectId = stored
+    _abortController = new AbortController()
+  }
+  return _activeSubjectId
+}
+
+// ── HTTP helpers ────────────────────────────────────────────────────────────────────────────
+
+function _subjectHeaders(): Record<string, string> {
+  if (_activeSubjectId) {
+    return { 'X-Subject-Id': _activeSubjectId }
+  }
+  return {}
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ..._subjectHeaders(),
+    ...(init?.headers as Record<string, string> | undefined),
+  }
   const res = await fetch(`${BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...init?.headers },
+    signal: _abortController?.signal ?? undefined,
     ...init,
+    headers,
   })
   if (!res.ok) {
     const text = await res.text()
@@ -20,7 +77,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 async function upload<T>(path: string, file: File, fieldName = 'file'): Promise<T> {
   const fd = new FormData()
   fd.append(fieldName, file)
-  const res = await fetch(`${BASE}${path}`, { method: 'POST', body: fd })
+  const res = await fetch(`${BASE}${path}`, {
+    method: 'POST',
+    body: fd,
+    signal: _abortController?.signal ?? undefined,
+    headers: _subjectHeaders(),
+  })
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`Upload ${res.status}: ${text}`)
@@ -28,7 +90,7 @@ async function upload<T>(path: string, file: File, fieldName = 'file'): Promise<
   return res.json() as Promise<T>
 }
 
-// ── Legacy Types ──────────────────────────────────────────────────────────────
+// ── Legacy Types ──────────────────────────────────────────────────────────────────────────
 
 export interface Chapter {
   unit_number: number
@@ -57,7 +119,7 @@ export interface LessonPlanExtraction {
   raw_text_preview: string
 }
 
-// ── Multi-subject Types ───────────────────────────────────────────────────────
+// ── Multi-subject Types ────────────────────────────────────────────────────────────────────────
 
 export interface ChapterData {
   id?: number
@@ -85,6 +147,25 @@ export interface LpMetadata {
   raw_text_length: number
 }
 
+/** Marking scheme for one exam type (ISA-I, ISA-II, or ESA) */
+export interface ExamScheme {
+  exam_type: string                // "ISA-I" | "ISA-II" | "ESA"
+  total_marks: number
+  duration: string
+  instructions: string
+  total_questions: number
+  questions_to_attempt: number
+  marks_per_full_question: number
+  sub_question_pattern: number[]   // e.g. [10, 5]
+}
+
+/** Three independently editable marking schemes */
+export interface MarkingSchemes {
+  isa1: ExamScheme | null
+  isa2: ExamScheme | null
+  esa:  ExamScheme | null
+}
+
 export interface SubjectListItem {
   id?: number
   subject_id: string
@@ -94,7 +175,8 @@ export interface SubjectListItem {
   semester: string
   academic_year: string
   minor_configuration: Partial<MinorConfig>
-  lp_metadata: Partial<LpMetadata>
+  lp_metadata: Partial<LpMetadata> & { marking_schemes?: MarkingSchemes | null }
+  marking_schemes?: MarkingSchemes | null
 }
 
 export interface SubjectDetail extends SubjectListItem {
@@ -112,6 +194,7 @@ export interface SubjectIn {
   units: { unit_number: number; title: string; chapters: { chapter_number: number; title: string; topics: string[] }[] }[]
   minor_configuration: MinorConfig
   lp_metadata?: { confidence: number; warnings: string[]; source_filename: string; raw_text_length: number } | null
+  marking_schemes?: MarkingSchemes | null
 }
 
 /** LP parse response — not yet saved; frontend shows review screen first */
@@ -129,12 +212,13 @@ export interface LpParseResult {
   academic_year: string | null
   units: ParsedUnit[]
   minor_configuration: MinorConfig
+  marking_schemes: MarkingSchemes | null
   confidence: number
   warnings: string[]
   raw_text_preview: string
 }
 
-// ── Existing types (unchanged) ────────────────────────────────────────────────
+// ── Existing types (unchanged) ──────────────────────────────────────────────────────────────────
 
 export interface Question {
   question_id: string
@@ -247,19 +331,19 @@ export interface AuditLog {
   details?: unknown
 }
 
-// ── API client ────────────────────────────────────────────────────────────────
+// ── API client ───────────────────────────────────────────────────────────────────────────────
 
 export const api = {
   health: () => request<{ status: string }>('/health'),
 
-  // ── Legacy Course (backward compat) ─────────────────────────────────────────
+  // ── Legacy Course (backward compat) ──────────────────────────────────────────────────
   getCourseInfo: () => request<CourseInfo>('/course/info'),
   saveCourseInfo: (data: CourseInfo) => request<CourseInfo>('/course/info', { method: 'POST', body: JSON.stringify(data) }),
   getCourseStructure: () => request<CourseStructure>('/course/structure'),
   saveCourseStructure: (chapters: Chapter[]) => request<CourseStructure>('/course/structure', { method: 'POST', body: JSON.stringify({ chapters }) }),
   extractLessonPlan: (file: File) => upload<LessonPlanExtraction>('/course/lesson-plan/extract', file),
 
-  // ── Multi-subject Management ─────────────────────────────────────────────────
+  // ── Multi-subject Management ──────────────────────────────────────────────────────
   listSubjects: () => request<SubjectListItem[]>('/subjects'),
   createSubject: (data: SubjectIn) => request<SubjectDetail>('/subjects', { method: 'POST', body: JSON.stringify(data) }),
   getSubject: (subjectId: string) => request<SubjectDetail>(`/subjects/${subjectId}`),
@@ -269,7 +353,12 @@ export const api = {
   setActiveSubjectId: (subjectId: string) => request<{ active_subject_id: string }>('/subjects/active', { method: 'POST', body: JSON.stringify({ subject_id: subjectId }) }),
   parseLP: (file: File) => upload<LpParseResult>('/subjects/lp-parse', file),
 
-  // ── Questions ────────────────────────────────────────────────────────────────
+  // ── Subject Context ─────────────────────────────────────────────────────────────────────
+  getSubjectContext: (subjectId: string) => request<Record<string, unknown>>(`/subjects/${subjectId}/context`),
+  putSubjectContext: (subjectId: string, ctx: Record<string, unknown>) =>
+    request<{ ok: boolean }>(`/subjects/${subjectId}/context`, { method: 'PUT', body: JSON.stringify(ctx) }),
+
+  // ── Questions ──────────────────────────────────────────────────────────────────────────
   getQuestions: (params?: { chapter?: number; bloom?: string; limit?: number; offset?: number }) => {
     const qs = new URLSearchParams()
     if (params?.chapter) qs.set('chapter', String(params.chapter))
@@ -285,7 +374,7 @@ export const api = {
   deleteQuestion: (id: string) =>
     request<{ ok: boolean }>(`/questions/${id}`, { method: 'DELETE' }),
 
-  // ── Papers ───────────────────────────────────────────────────────────────────
+  // ── Papers ───────────────────────────────────────────────────────────────────────────
   listPapers: () => request<PaperListItem[]>('/papers'),
   getPaper: (id: string) => request<PaperSet>(`/papers/${id}`),
   generatePapers: (data: {
@@ -297,16 +386,21 @@ export const api = {
     request<PaperQuestion>(`/papers/${setId}/questions/${slotId}`, {
       method: 'PATCH', body: JSON.stringify({ status, edited_text: editedText }),
     }),
+  regenerateQuestion: (setId: string, slotId: string) =>
+    request<PaperQuestion>(`/papers/${setId}/questions/${slotId}/regenerate`, {
+      method: 'POST',
+    }),
   approvePaper: (setId: string) =>
     request<{ ok: boolean }>(`/papers/${setId}/approve`, { method: 'POST' }),
   getValidation: (setId: string) => request<ValidationReport>(`/papers/${setId}/validation`),
   exportDocxUrl: (setId: string) => `${BASE}/papers/${setId}/export/docx`,
   exportPdfUrl: (setId: string) => `${BASE}/papers/${setId}/export/pdf`,
+  previewUrl: (setId: string) => `${BASE}/papers/${setId}/preview`,
 
-  // ── Audit ────────────────────────────────────────────────────────────────────
+  // ── Audit ────────────────────────────────────────────────────────────────────────────
   getStats: () => request<Stats>('/audit/stats'),
   getLogs: (limit = 20) => request<AuditLog[]>(`/audit/logs?limit=${limit}`),
 
-  // ── Settings ─────────────────────────────────────────────────────────────────
+  // ── Settings ─────────────────────────────────────────────────────────────────────────
   getLLMHealth: () => request<{ status: string; message: string; model: string }>('/settings/health'),
 }

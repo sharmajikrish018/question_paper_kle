@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { api, type PaperListItem, type PaperSet, type PaperQuestion } from '@/lib/api'
-import { PageHeader, ConfidentialBanner, SectionLabel, Badge, Alert, Spinner, EmptyState } from '@/components/ui'
+import { PageHeader, ConfidentialBanner, SectionLabel, Badge, Alert, Spinner, EmptyState, ActiveSubjectBanner } from '@/components/ui'
 
 export default function ReviewPage() {
   const [papers, setPapers] = useState<PaperListItem[]>([])
@@ -13,8 +13,10 @@ export default function ReviewPage() {
   const [approving, setApproving] = useState(false)
   const [msg, setMsg] = useState('')
   const [updatingSlot, setUpdatingSlot] = useState<string | null>(null)
+  const [regeneratingSlot, setRegeneratingSlot] = useState<string | null>(null)
   const [editingSlot, setEditingSlot] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
 
   const refreshPapers = useCallback(async () => {
     setLoadingList(true)
@@ -33,13 +35,26 @@ export default function ReviewPage() {
     refreshPapers()
   }, [refreshPapers])
 
-  // Re-fetch whenever the user switches back to this tab
+  // Re-fetch whenever the user switches back to this tab or subject changes
   useEffect(() => {
     const onVisible = () => {
       if (document.visibilityState === 'visible') refreshPapers()
     }
+    const onSubjectChange = () => {
+      setSelected(null)
+      setDetail(null)
+      refreshPapers()
+    }
     document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
+    if (typeof window !== 'undefined') {
+      window.addEventListener('activeSubjectChanged', onSubjectChange)
+    }
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('activeSubjectChanged', onSubjectChange)
+      }
+    }
   }, [refreshPapers])
 
   async function loadDetail(id: string) {
@@ -79,6 +94,24 @@ export default function ReviewPage() {
     }
   }
 
+  async function handleRegenerateQ(slotId: string) {
+    if (!selected) return
+    setRegeneratingSlot(slotId)
+    try {
+      const updated = await api.regenerateQuestion(selected, slotId)
+      setDetail(d => d ? {
+        ...d,
+        questions: d.questions.map(q => q.slot_id === slotId ? updated : q)
+      } : null)
+      setMsg(`⚡ Question ${slotId} regenerated successfully!`)
+      setTimeout(() => setMsg(''), 4000)
+    } catch (err: any) {
+      setMsg(`❌ Regeneration failed: ${err.message || err}`)
+    } finally {
+      setRegeneratingSlot(null)
+    }
+  }
+
   function statusBadge(status: string) {
     if (status === 'APPROVED') return <Badge variant="green">✅ Approved</Badge>
     if (status === 'REJECTED') return <Badge variant="red">❌ Rejected</Badge>
@@ -93,11 +126,18 @@ export default function ReviewPage() {
   }
 
   const pendingCount = detail?.questions.filter(q => q.approval_status === 'PENDING').length ?? 0
+  const allApproved = Boolean(
+    detail &&
+    detail.questions.length > 0 &&
+    detail.questions.every(q => q.approval_status === 'APPROVED')
+  )
 
   return (
     <>
       <PageHeader title="Faculty Review" subtitle="Review, approve and export generated question papers" />
       <ConfidentialBanner />
+
+      <ActiveSubjectBanner showLink={false} />
 
       {msg && <Alert variant="success">{msg}</Alert>}
 
@@ -157,7 +197,7 @@ export default function ReviewPage() {
 
           {detail && (
             <>
-              {/* Header */}
+              {/* Header & Actions */}
               <div className="flex justify-between items-center mb-4">
                 <div>
                   <div className="font-bold" style={{ fontSize: '1.25rem' }}>{detail.set_id}</div>
@@ -167,24 +207,146 @@ export default function ReviewPage() {
                     <Badge variant="blue">{detail.question_count} questions</Badge>
                   </div>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 items-center">
                   {pendingCount > 0 && (
                     <span className="badge badge-orange">{pendingCount} pending</span>
                   )}
                   <button className="btn btn-secondary btn-sm"
-                    onClick={() => window.open(api.exportDocxUrl(detail.set_id))}>
-                    📥 DOCX
+                    onClick={() => setShowPreviewModal(true)}>
+                    👁 View Paper
                   </button>
-                  <button className="btn btn-secondary btn-sm"
-                    onClick={() => window.open(api.exportPdfUrl(detail.set_id))}>
-                    📄 PDF
-                  </button>
+                  {allApproved ? (
+                    <button className="btn btn-secondary btn-sm"
+                      onClick={() => window.open(api.exportDocxUrl(detail.set_id))}
+                      title="Download DOCX format">
+                      📥 DOCX
+                    </button>
+                  ) : (
+                    <button className="btn btn-secondary btn-sm"
+                      disabled
+                      style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                      title="All questions must be approved before downloading DOCX">
+                      🔒 📥 DOCX
+                    </button>
+                  )}
+                  {allApproved ? (
+                    <button className="btn btn-secondary btn-sm"
+                      onClick={() => window.open(api.exportPdfUrl(detail.set_id))}
+                      title="Download PDF format">
+                      📄 PDF
+                    </button>
+                  ) : (
+                    <button className="btn btn-secondary btn-sm"
+                      disabled
+                      style={{ opacity: 0.5, cursor: 'not-allowed' }}
+                      title="All questions must be approved before downloading PDF">
+                      🔒 📄 PDF
+                    </button>
+                  )}
                   <button className="btn btn-primary btn-sm" onClick={handleApprove}
                     disabled={approving || detail.status === 'APPROVED'}>
                     {approving ? <Spinner size={14} /> : detail.status === 'APPROVED' ? '✅ Approved' : 'Approve All'}
                   </button>
                 </div>
               </div>
+
+              {/* Approval status banner for downloads */}
+              {!allApproved ? (
+                <div style={{
+                  marginBottom: '1rem', padding: '0.65rem 1rem', borderRadius: '8px',
+                  background: 'rgba(234, 88, 12, 0.08)', border: '1px solid rgba(234, 88, 12, 0.25)',
+                  fontSize: '0.825rem', color: 'var(--text)', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  gap: '1rem'
+                }}>
+                  <div className="flex items-center gap-2">
+                    <span style={{ fontSize: '1.1rem' }}>🔒</span>
+                    <span><strong>Downloads Locked:</strong> All questions must be approved by faculty before downloading the question paper ({pendingCount} pending review).</span>
+                  </div>
+                  <button className="btn btn-primary btn-sm" onClick={handleApprove} disabled={approving} style={{ flexShrink: 0 }}>
+                    {approving ? <><Spinner size={12} />&nbsp;Approving…</> : '✓ Approve All Now'}
+                  </button>
+                </div>
+              ) : (
+                <div style={{
+                  marginBottom: '1rem', padding: '0.65rem 1rem', borderRadius: '8px',
+                  background: 'rgba(22, 163, 74, 0.08)', border: '1px solid rgba(22, 163, 74, 0.25)',
+                  fontSize: '0.825rem', color: 'var(--green-text, #15803d)', display: 'flex', alignItems: 'center', gap: '0.5rem'
+                }}>
+                  <span>✅</span>
+                  <span><strong>All questions approved!</strong> Question paper downloads (DOCX and PDF) are unlocked.</span>
+                </div>
+              )}
+
+              {/* View Paper PDF Modal Overlay */}
+              {showPreviewModal && (
+                <div style={{
+                  position: 'fixed', inset: 0, zIndex: 10000,
+                  background: 'rgba(0, 0, 0, 0.75)', backdropFilter: 'blur(4px)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem'
+                }} onClick={() => setShowPreviewModal(false)}>
+                  <div className="card" style={{
+                    width: '100%', maxWidth: '960px', height: '90vh',
+                    display: 'flex', flexDirection: 'column', overflow: 'hidden', padding: 0,
+                    borderRadius: '16px', boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.35)',
+                    position: 'relative', zIndex: 10001
+                  }} onClick={e => e.stopPropagation()}>
+                    <div style={{
+                      padding: '1rem 1.5rem', background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-light)',
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      position: 'relative', zIndex: 10, flexShrink: 0
+                    }}>
+                      <div className="font-bold text-lg flex items-center gap-2" style={{ color: 'var(--text)' }}>
+                        View Question Paper ({detail.set_id})
+                      </div>
+                      <button className="btn btn-secondary btn-sm"
+                        onClick={() => setShowPreviewModal(false)}
+                        aria-label="Close"
+                        style={{
+                          fontSize: '1.25rem',
+                          fontWeight: 'bold',
+                          lineHeight: 1,
+                          padding: '0.35rem 0.65rem',
+                          cursor: 'pointer',
+                          zIndex: 20,
+                          position: 'relative',
+                          color: 'var(--text)',
+                          borderColor: 'var(--border)'
+                        }}>
+                        ✕
+                      </button>
+                    </div>
+                    <div style={{ flex: 1, background: '#525659', padding: 0, overflow: 'hidden', position: 'relative', zIndex: 1 }}>
+                      <iframe
+                        src={api.previewUrl(detail.set_id)}
+                        title={`View Question Paper ${detail.set_id}`}
+                        width="100%"
+                        height="100%"
+                        style={{ border: 'none', background: '#ffffff', display: 'block' }}
+                      />
+                    </div>
+                    <div style={{
+                      padding: '0.85rem 1.5rem', background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-light)',
+                      display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', flexShrink: 0,
+                      position: 'relative', zIndex: 10
+                    }}>
+                      {allApproved ? (
+                        <button className="btn btn-primary"
+                          onClick={() => window.open(api.exportPdfUrl(detail.set_id))}
+                          style={{ padding: '0.5rem 1.75rem', fontWeight: 600 }}>
+                          📥 Download Question Paper (PDF)
+                        </button>
+                      ) : (
+                        <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--orange)', fontWeight: 500 }}>
+                          <span>🔒 Question paper download is locked until all questions are approved ({pendingCount} pending).</span>
+                          <button className="btn btn-secondary btn-sm" disabled style={{ opacity: 0.5, cursor: 'not-allowed' }}>
+                            🔒 Download Locked
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Questions */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
@@ -232,16 +394,22 @@ export default function ReviewPage() {
                         <button className="btn btn-sm"
                           style={{ background: 'var(--green-light)', color: 'var(--green-text)' }}
                           onClick={() => updateQ(q.slot_id, 'APPROVED')}
-                          disabled={updatingSlot === q.slot_id || q.approval_status === 'APPROVED'}>
+                          disabled={updatingSlot === q.slot_id || regeneratingSlot === q.slot_id || q.approval_status === 'APPROVED'}>
                           ✅ Approve
+                        </button>
+                        <button className="btn btn-secondary btn-sm"
+                          onClick={() => handleRegenerateQ(q.slot_id)}
+                          disabled={updatingSlot === q.slot_id || regeneratingSlot === q.slot_id}>
+                          {regeneratingSlot === q.slot_id ? <><Spinner size={12} /> Regenerating...</> : '🔄 Regenerate Question'}
                         </button>
                         <button className="btn btn-sm btn-danger"
                           onClick={() => updateQ(q.slot_id, 'REJECTED')}
-                          disabled={updatingSlot === q.slot_id || q.approval_status === 'REJECTED'}>
+                          disabled={updatingSlot === q.slot_id || regeneratingSlot === q.slot_id || q.approval_status === 'REJECTED'}>
                           ❌ Reject
                         </button>
                         <button className="btn btn-secondary btn-sm"
-                          onClick={() => { setEditingSlot(q.slot_id); setEditText(q.question_text) }}>
+                          onClick={() => { setEditingSlot(q.slot_id); setEditText(q.question_text) }}
+                          disabled={updatingSlot === q.slot_id || regeneratingSlot === q.slot_id}>
                           ✏️ Edit
                         </button>
                       </div>
