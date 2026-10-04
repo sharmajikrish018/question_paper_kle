@@ -240,8 +240,25 @@ if (-not $frontendHealthy) {
         Stop-PortProcess -Port 3000 -ServiceName "Unresponsive frontend"
     }
     Write-Step "Starting frontend UI (Next.js)..."
-    $npmCmd = (Get-Command npm -ErrorAction SilentlyContinue).Source
-    if (-not $npmCmd) { $npmCmd = "npm.cmd" }
+    # Resolve npm.cmd explicitly — Start-Process cannot launch .ps1 scripts directly
+    # Get-Command npm may return npm.ps1 which causes "not a valid Win32 application"
+    $npmCmd = $null
+    $npmResolved = (Get-Command npm -ErrorAction SilentlyContinue).Source
+    if ($npmResolved) {
+        # Try sibling npm.cmd in the same directory
+        $npmCmdCandidate = Join-Path (Split-Path $npmResolved) "npm.cmd"
+        if (Test-Path $npmCmdCandidate) {
+            $npmCmd = $npmCmdCandidate
+        }
+    }
+    if (-not $npmCmd) {
+        # Search every PATH entry for npm.cmd
+        foreach ($dir in ($env:PATH -split ';')) {
+            $candidate = Join-Path $dir "npm.cmd"
+            if (Test-Path $candidate) { $npmCmd = $candidate; break }
+        }
+    }
+    if (-not $npmCmd) { $npmCmd = "npm.cmd" }   # last-resort fallback
 
     $frontendProc = Start-Process `
         -FilePath $npmCmd `

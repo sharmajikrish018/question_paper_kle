@@ -174,16 +174,26 @@ if (Test-Path "$projectRoot\scripts\create_sample_files.py") {
 Write-Step "Installing frontend dependencies (Next.js)..."
 $frontendDir = Join-Path $projectRoot "frontend"
 if (Test-Path "$frontendDir\package.json") {
+    # Clear corrupted npm cache that causes "Cache entry deserialization failed" warnings
+    Write-Host "  Verifying npm cache integrity..." -NoNewline
+    $cacheCheck = npm cache verify 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host " [corrupted, cleaning]"
+        npm cache clean --force 2>&1 | Out-Null
+    } else {
+        Write-Host " [OK]"
+    }
+
     Push-Location $frontendDir
     try {
         if (Test-Path "package-lock.json") {
-            npm ci --silent
+            npm ci
         } else {
-            npm install --silent
+            npm install
         }
         if ($LASTEXITCODE -ne 0) {
-            # Fallback to standard install if ci failed
-            npm install --silent
+            Write-Host "  npm ci failed, retrying with npm install..."
+            npm install
         }
     } finally {
         Pop-Location
