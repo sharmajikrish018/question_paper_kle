@@ -271,9 +271,19 @@ class CourseIntakeAgent:
         prompt = (
             'Return ONLY JSON: {"course_name":"","course_code":"","department":"","semester":"",'
             '"academic_year":"","chapters":[{"n":1,"title":""}]}\n'
-            "Each line below is a keyword hit plus the words after it. Keep only the real value; "
-            "drop trailing words belonging to the next field. Chapter title = heading only, "
-            "no description, no trailing colon.\n\n"
+            "CRITICAL RULES — read carefully before filling each field:\n"
+            "- course_name: ONLY the course title words (e.g. 'Agentic AI'). "
+            "STOP immediately before words like Course, Code, Total, Duration, FMTH, Rev, Lesson, Year, Semester, ISA, ESA.\n"
+            "- course_code: ONLY the alphanumeric code (e.g. '26ECAC401'). "
+            "STOP immediately before words like Total, Course, Title, Hours, Credits.\n"
+            "- department: ONLY the department/school name (e.g. 'Computer Science and Engineering'). "
+            "STOP before FMTH codes, Rev., Course, Regulation, scheme codes.\n"
+            "- semester: ONLY the semester value (e.g. '7th Semester'). STOP before Course, Code, Title.\n"
+            "- academic_year: ONLY the year range (e.g. '2026-27'). "
+            "STOP immediately before Course, Title, Code, Lesson, Plan.\n"
+            "- Drop ALL trailing punctuation, colons, dashes from every field value.\n"
+            "- Chapter title = heading only, no description, no trailing colon.\n\n"
+            "Each line below is a keyword hit plus the words following it in the document:\n"
             + "\n".join(f"{k}: {v}" for k, v in meta.items()) + "\n"
             + "\n".join(f"chapter {n}: {' '.join(t.partition(':')[0].split()[:10])}" for _, n, t in chapters) + "\n/no_think"
         )
@@ -294,11 +304,51 @@ class CourseIntakeAgent:
             for f in ("course_name", "course_code", "department", "semester", "academic_year"):
                 setattr(result, f, meta.get(f))
 
-        def _clean(v):
-            return re.split(r"(?i)\b(?:course|total|duration|isa|esa|year|semester|lesson|fmth\S*)\b", v or "")[0].strip(" :-") or None
+        # Post-processing cleaner — always runs (even after successful LLM extraction)
+        # to strip trailing garbage tokens that bleed in from adjacent fields.
+        # Each field has its own stop-word set so we don't accidentally strip
+        # legitimate parts of the value (e.g. 'semester' from '7th Semester').
+        _FIELD_STOP: dict[str, re.Pattern] = {
+            "course_name": re.compile(
+                r"(?i)\b(?:course|code|total|duration|isa|esa|lesson|plan"
+                r"|fmth\S*|rev(?:ision)?[.\s]|regulation|scheme|credit|hours|title)\b"
+            ),
+            "course_code": re.compile(
+                r"(?i)\b(?:total|duration|course|title|lesson|plan|credits?|hours)\b"
+            ),
+            "department": re.compile(
+                r"(?i)\b(?:fmth\S*|rev(?:ision)?[.\s]|regulation|scheme|course|total|credit|hours)\b"
+                r"|(?:FMTH|Rev\.)[\w./]*"
+            ),
+            "semester": re.compile(
+                r"(?i)\b(?:course|code|title|total|duration|fmth\S*|lesson|plan)\b"
+            ),
+            "academic_year": re.compile(
+                r"(?i)\b(?:course|title|code|lesson|plan|fmth\S*|regulation|scheme)\b"
+            ),
+        }
+
+        def _clean(v: str | None, field: str = "") -> str | None:
+            """Strip trailing noise after the first stop-word boundary for the given field."""
+            if not v:
+                return None
+            pat = _FIELD_STOP.get(field)
+            if pat:
+                cut = pat.search(v)
+                cleaned = v[:cut.start()].strip(" :-,/") if cut else v.strip(" :-,/")
+            else:
+                cleaned = v.strip(" :-,/")
+            return cleaned or None
+
+        # Apply cleaner to all metadata fields unconditionally
+        for f in ("course_name", "course_code", "department", "semester", "academic_year"):
+            raw_val = getattr(result, f)
+            if raw_val:
+                setattr(result, f, _clean(raw_val, f))
+        # Fallback: if LLM left a field empty, try regex hit + clean
         for f in ("course_name", "course_code", "department", "semester", "academic_year"):
             if not getattr(result, f):
-                setattr(result, f, _clean(meta.get(f)))
+                setattr(result, f, _clean(meta.get(f), f))
 
         units: dict[int, UnitInfo] = {}
         for u, n, raw in chapters:
@@ -481,41 +531,84 @@ class CourseIntakeAgent:
         questions_to_attempt = word_to_num.get(att_match.group(1).lower(), 2) if att_match else (2 if is_isa else 5)
 
         # 4. Question & Sub-question mark extraction
-        # Track marks per question and sub-parts (e.g. Q1a -> 10, Q1b -> 5)
+        # We track MAIN questions (Q1, Q2, Q3 …) separately from sub-parts (a, b, c).
+        # A "main question" line looks like: "Q1", "Q. 1", "1.", "Question 1" WITHOUT a
+        # sub-part letter on the same pattern match. Lines like "Q1a" or "Q.1(a)" are
+        # sub-part lines only.
         part_marks_map: dict[str, list[int]] = {}
         sub_marks = []
         main_questions_found = set()
 
-        for line in qp_text.splitlines():
-            # Matches "Q1a", "Q.1 (a)", "1. a)", "Q1 (a)", "Q1 a"
-            q_match = re.search(r"(?i)\b(?:q|question\s*)?(\d+)\s*[\.\)]?\s*[\(\[]?([a-d])[\)\]\.]?", line)
-            # Matches marks like "10 marks", "[10]", "(10)", "10M", "10 Marks"
-            mark_match = re.search(r"(?i)(?:\[|\(|\b)(\d{1,2})\s*(?:marks?|m|pts)?(?:\]|\)|\b)", line)
-            # More explicit marks regex
-            mark_explicit = re.search(r"(?i)\b(\d{1,2})\s*(?:marks?|m)\b", line) or re.search(r"\[(\d{1,2})\]", line)
+        # Regex for a STANDALONE main question heading (no sub-letter immediately after)
+        # Matches: "Q1", "Q. 1", "Q.1 ", "1.", "Question 1" when not followed by a sub-letter
+        _MAIN_Q_RE = re.compile(
+            r"(?i)(?:^|[\s\n])"
+            r"(?:q(?:uestion)?[.\s]?)"
+            r"(\d{1,2})"
+            r"(?:[.\)\]:]?\s*$|[.\)\]:]?\s+(?![a-d][)\]\.]?\s))",
+        )
+        # Regex for a sub-part line: Q1a, Q.1(a), Q1 a), 1. a), etc.
+        _SUB_Q_RE = re.compile(
+            r"(?i)\b(?:q(?:uestion\s*)?)?(\d+)\s*[\.\)]?\s*[\(\[]?([a-d])[\)\]\.]?"
+        )
 
+        for line in qp_text.splitlines():
+            sub_match = _SUB_Q_RE.search(line)
+            main_match = _MAIN_Q_RE.search(line)
+
+            # Marks detection
+            mark_explicit = (
+                re.search(r"(?i)\b(\d{1,2})\s*(?:marks?|m)\b", line)
+                or re.search(r"\[(\d{1,2})\]", line)
+            )
+            mark_fallback = re.search(
+                r"(?i)(?:\[|\(|\b)(\d{1,2})\s*(?:marks?|m|pts)?(?:\]|\)|\b)", line
+            )
             m_val = None
             if mark_explicit:
                 m_val = int(mark_explicit.group(1))
-            elif mark_match and int(mark_match.group(1)) in (2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 16, 20):
-                m_val = int(mark_match.group(1))
+            elif mark_fallback and int(mark_fallback.group(1)) in (2,3,4,5,6,7,8,10,12,14,15,16,20):
+                m_val = int(mark_fallback.group(1))
 
-            if q_match:
-                main_q = int(q_match.group(1))
-                part_letter = q_match.group(2).lower()
+            if sub_match:
+                # This is a sub-question line (Q1a, Q2b, …)
+                main_q   = int(sub_match.group(1))
+                part_ltr = sub_match.group(2).lower()
                 main_questions_found.add(main_q)
                 if m_val is not None:
-                    part_marks_map.setdefault(part_letter, []).append(m_val)
+                    part_marks_map.setdefault(part_ltr, []).append(m_val)
                     sub_marks.append(m_val)
+            elif main_match:
+                # Standalone main question header (no sub-letter)
+                main_questions_found.add(int(main_match.group(1)))
             elif m_val is not None:
-                # Standalone sub-question line, e.g. "a) Explain ... [10]" or "b) Derive ... [5]"
+                # Standalone sub-question line, e.g. "a) Explain … [10]"
                 sub_label_match = re.search(r"(?i)(?:^|[\s\(])([a-d])[\)\.]\s*", line)
                 if sub_label_match:
-                    part_letter = sub_label_match.group(1).lower()
-                    part_marks_map.setdefault(part_letter, []).append(m_val)
+                    part_ltr = sub_label_match.group(1).lower()
+                    part_marks_map.setdefault(part_ltr, []).append(m_val)
                     sub_marks.append(m_val)
 
-        total_questions = len(main_questions_found) if main_questions_found else (3 if is_isa else 8)
+        # Derive total_questions with exam-type sanity clamping:
+        # ISA standard = 3 full questions (attempt any 2).
+        # ESA standard = 7 full questions (attempt any 5).
+        # Only override if the regex scan found nothing or something clearly wrong.
+        ISA_DEFAULT_TOTAL = 3
+        ESA_DEFAULT_TOTAL = 7
+        detected_total = len(main_questions_found) if main_questions_found else None
+        if is_isa:
+            # For ISA keep detected value only if it is 3 (standard) or 4 at most;
+            # anything outside [2,4] is almost certainly a mis-parse.
+            if detected_total and 2 <= detected_total <= 4:
+                total_questions = detected_total
+            else:
+                total_questions = ISA_DEFAULT_TOTAL
+        else:  # ESA
+            # ESA: accept 5–10; default 7.
+            if detected_total and 5 <= detected_total <= 10:
+                total_questions = detected_total
+            else:
+                total_questions = ESA_DEFAULT_TOTAL
 
         # Build sub_question_pattern (e.g. a=10, b=5 -> [10, 5])
         sub_pattern = []

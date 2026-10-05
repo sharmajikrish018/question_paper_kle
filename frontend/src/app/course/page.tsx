@@ -247,7 +247,7 @@ function MarkingSchemesSection({
               {s ? (
                 <div style={{ fontSize: '0.8125rem', lineHeight: 1.7 }}>
                   <div><strong>Total Marks:</strong> {s.total_marks}</div>
-                  <div><strong>Full Questions:</strong> {s.total_questions}</div>
+                  <div><strong>Questions in Paper:</strong> {s.total_questions}</div>
                   <div><strong>Questions to Attempt:</strong> {s.questions_to_attempt}</div>
                   <div><strong>Marks per Full Question:</strong> {s.marks_per_full_question}</div>
                   {s.sub_question_pattern.length > 0 && (
@@ -295,7 +295,7 @@ function MarkingSchemesSection({
               Edit Marking Scheme — {SCHEME_KEYS.find(k => k.key === editingKey)?.label}
             </div>
             {numField('Total Marks', 'total_marks', 1)}
-            {numField('Full Questions (Printed)', 'total_questions', 1)}
+            {numField('Questions in Paper (Printed)', 'total_questions', 1)}
             {numField('Questions to Attempt', 'questions_to_attempt', 1)}
             {numField('Marks per Full Question', 'marks_per_full_question', 1)}
             {textField('Duration (e.g. 75 minutes)', 'duration')}
@@ -1187,7 +1187,7 @@ export default function CoursePage() {
                           {s ? (
                             <div style={{ fontSize: '0.8125rem', lineHeight: 1.7 }}>
                               <div><strong>Total Marks:</strong> {s.total_marks}</div>
-                              <div><strong>Full Questions:</strong> {s.total_questions}</div>
+                              <div><strong>Questions in Paper:</strong> {s.total_questions}</div>
                               <div><strong>Questions to Attempt:</strong> {s.questions_to_attempt}</div>
                               <div><strong>Marks per Full Question:</strong> {s.marks_per_full_question}</div>
                               {s.sub_question_pattern?.length > 0 && (
